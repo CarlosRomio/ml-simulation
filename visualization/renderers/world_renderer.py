@@ -32,11 +32,13 @@ class WorldRenderer:
         *,
         camera_x: int,
         camera_y: int,
-        view_width: int,
-        view_height: int,
+        view_width: float,
+        view_height: float,
         cell_size: int,
         grid_x: int,
         grid_y: int,
+        viewport_width_px: int,
+        viewport_height_px: int,
         visible_positions: set[tuple[int, int]] | None = None,
     ) -> None:
         """Desenha células dentro da janela de visualização.
@@ -52,7 +54,7 @@ class WorldRenderer:
         last_world_y = min(world.height, int(camera_y + view_height) + 1)
 
         viewport = pygame.Rect(
-            grid_x, grid_y, view_width * cell_size, view_height * cell_size
+            grid_x, grid_y, viewport_width_px, viewport_height_px
         )
         previous_clip = screen.get_clip()
         screen.set_clip(viewport)

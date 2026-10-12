@@ -54,6 +54,7 @@ def run(simulation: Simulation) -> None:
     agent_renderer = AgentRenderer()
     sidebar_renderer = SidebarRenderer()
     camera = Camera(world.width, world.height, view_width, view_height)
+    camera.configure_viewport(grid_width, grid_height, cell_size)
     grid_viewport = pygame.Rect(grid_x, grid_y, grid_width, grid_height)
     dragging_camera = False
     last_mouse_position: tuple[int, int] | None = None
@@ -76,11 +77,27 @@ def run(simulation: Simulation) -> None:
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 dragging_camera = False
                 last_mouse_position = None
+            elif event.type == pygame.MOUSEWHEEL:
+                mouse_position = pygame.mouse.get_pos()
+                if grid_viewport.collidepoint(mouse_position):
+                    zoom_step = 3 if event.y > 0 else -3
+                    new_cell_size = max(
+                        MIN_CELL_SIZE,
+                        min(MAX_CELL_SIZE, camera.cell_size + zoom_step),
+                    )
+                    if new_cell_size != camera.cell_size:
+                        camera.zoom_at(
+                            mouse_position[0],
+                            mouse_position[1],
+                            grid_x,
+                            grid_y,
+                            new_cell_size,
+                        )
             elif event.type == pygame.MOUSEMOTION and dragging_camera:
                 if last_mouse_position is not None:
                     dx = event.pos[0] - last_mouse_position[0]
                     dy = event.pos[1] - last_mouse_position[1]
-                    camera.pan_pixels(dx, dy, cell_size)
+                    camera.pan_pixels(dx, dy)
                 last_mouse_position = event.pos
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
@@ -110,6 +127,9 @@ def run(simulation: Simulation) -> None:
         # A câmera é independente da posição do agente e se move por arraste.
         camera_x = camera.x
         camera_y = camera.y
+        cell_size = camera.cell_size
+        visible_world_width = camera.visible_width
+        visible_world_height = camera.visible_height
 
         visible_cells = simulation.perception.observe(
             world, agent.x, agent.y, radius=agent.vision_radius
@@ -130,11 +150,13 @@ def run(simulation: Simulation) -> None:
             world,
             camera_x=camera_x,
             camera_y=camera_y,
-            view_width=view_width,
-            view_height=view_height,
+            view_width=visible_world_width,
+            view_height=visible_world_height,
             cell_size=cell_size,
             grid_x=grid_x,
             grid_y=grid_y,
+            viewport_width_px=grid_width,
+            viewport_height_px=grid_height,
             visible_positions=visible_positions,
         )
         previous_clip = screen.get_clip()
