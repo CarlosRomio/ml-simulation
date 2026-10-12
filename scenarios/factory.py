@@ -26,7 +26,7 @@ class ScenarioFactory:
             if (x, y) not in reserved_cells
         ]
 
-        required_cells = config.food_count + config.obstacle_count
+        required_cells = config.food_count + config.obstacle_count + config.water_count
 
         if required_cells > len(all_positions):
             raise ValueError(
@@ -36,7 +36,8 @@ class ScenarioFactory:
         selected = rng.sample(all_positions, required_cells)
 
         food_positions_raw = selected[:config.food_count]
-        obstacle_positions_raw = selected[config.food_count:]
+        water_positions_raw = selected[config.food_count:config.food_count + config.water_count]
+        obstacle_positions_raw = selected[config.food_count + config.water_count:]
 
         food_positions = tuple(
             (x, y, 1.0)
@@ -55,6 +56,7 @@ class ScenarioFactory:
             height=config.height,
             food_positions=food_positions,
             obstacle_positions=obstacle_positions,
+            water_positions=tuple(water_positions_raw),
             start_position=start_position,
             seed=seed,
         )

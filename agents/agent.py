@@ -8,6 +8,7 @@ from environment.cell import Cell
 from environment.world import World
 from agents.navigation.bfs import find_path
 from agents.needs import AgentNeeds
+from environment.resources import Water
 
 
 Position = tuple[int, int]
@@ -108,13 +109,31 @@ class Agent:
     ) -> None:
         current_position = (self.x, self.y)
 
+        water_cells = [
+            cell for cell in nearby_cells
+            if isinstance(cell.resource, Water)
+            and (cell.x, cell.y) != current_position
+        ]
         food_cells = [
-            cell
-            for cell in nearby_cells
+            cell for cell in nearby_cells
             if cell.resource is not None
             and cell.resource.is_collectible
             and (cell.x, cell.y) != current_position
         ]
+        # Em sede crítica, procurar água tem prioridade sobre comida.
+        if self.thirst >= 50.0:
+            # Fontes conhecidas no mapa são alvos mesmo fora do raio de visão.
+            water_positions = world.get_water_positions()
+            self.rng.shuffle(water_positions)
+            for candidate in water_positions:
+                path = pathfinder(world, current_position, candidate)
+                if path is not None and len(path) > 1:
+                    self.target = candidate
+                    self.path = path
+                    return
+            candidates = water_cells
+        else:
+            candidates = food_cells
 
         # Embaralha os candidatos para não favorecer sempre
         # a mesma ordem de varredura das células.
@@ -144,10 +163,18 @@ class Agent:
     ) -> Position:
         self._record_position()
         current_position = (self.x, self.y)
+        if self.thirst >= 1.0 and isinstance(world.get_cell(*current_position).resource, Water):
+            return (0, 0)
 
         # O agente chegou ao destino.
         if self.target == current_position:
             self._clear_target()
+
+        # Sede alta invalida um alvo de comida para permitir procurar água.
+        if self.thirst >= 50.0 and self.target is not None:
+            target_cell = world.get_cell(*self.target)
+            if not isinstance(target_cell.resource, Water):
+                self._clear_target()
 
         # Escolhe um alvo e calcula uma rota quando necessário.
         if self.target is None or not self.path:

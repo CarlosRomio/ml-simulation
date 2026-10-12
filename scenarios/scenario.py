@@ -12,11 +12,12 @@ class Scenario:
     obstacle_positions: tuple[tuple[int, int, ObstacleType], ...]
     start_position: tuple[int, int]
     seed: int
+    water_positions: tuple[tuple[int, int], ...] = ()
 
 
     def to_world(self):
         from environment.cell import Cell
-        from environment.resources import Food
+        from environment.resources import Food, Water
         from environment.world import World
 
         world = World(
@@ -29,6 +30,9 @@ class Scenario:
 
         for x, y, quantity in self.food_positions:
             world.get_cell(x, y).resource = Food(quantity=quantity)
+
+        for x, y in self.water_positions:
+            world.get_cell(x, y).resource = Water()
 
         for x, y, obstacle_type in self.obstacle_positions:
             world.get_cell(x, y).obstacle = obstacle_type

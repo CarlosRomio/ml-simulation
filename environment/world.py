@@ -5,7 +5,7 @@ from random import Random
 
 from environment.cell import Cell
 from environment.obstacles import ObstacleType
-from environment.resources import Plant, PlantState
+from environment.resources import Plant, PlantState, Water
 
 
 class World:
@@ -17,11 +17,12 @@ class World:
         obstacle_count: int = 0,
         reserved_cells: set[tuple[int, int]] | None = None,
         rng: Random | None = None,
+        water_count: int = 0,
     ):
         if width < 1 or height < 1:
             raise ValueError("As dimensões do mundo devem ser positivas.")
 
-        if food_count < 0 or obstacle_count < 0:
+        if food_count < 0 or obstacle_count < 0 or water_count < 0:
             raise ValueError("Comida e obstáculos não podem ser negativos.")
 
         self.width = width
@@ -53,6 +54,7 @@ class World:
 
         self._place_food(food_count)
         self._place_obstacles(obstacle_count)
+        self._place_water(water_count)
 
     def _place_food(self, food_count: int) -> None:
         available_cells = [
@@ -70,6 +72,24 @@ class World:
 
         for cell in self.rng.sample(available_cells, food_count):
             cell.resource = Plant(state=PlantState.MATURE)
+
+    def _place_water(self, water_count: int) -> None:
+        available_cells = [
+            cell for row in self.grid for cell in row
+            if cell.resource is None and cell.obstacle is None
+            and (cell.x, cell.y) not in self.reserved_cells
+        ]
+        if water_count > len(available_cells):
+            raise ValueError("Não há células suficientes para fontes de água.")
+        for cell in self.rng.sample(available_cells, water_count):
+            cell.resource = Water()
+
+    def get_water_positions(self) -> list[tuple[int, int]]:
+        return [
+            (cell.x, cell.y)
+            for row in self.grid for cell in row
+            if isinstance(cell.resource, Water)
+        ]
 
     def _place_obstacles(self, obstacle_count: int) -> None:
         available_cells = [

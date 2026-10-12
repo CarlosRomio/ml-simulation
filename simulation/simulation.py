@@ -5,6 +5,7 @@ from random import Random
 from agents.agent import Agent
 from agents.perception import Perception
 from environment.world import World
+from environment.resources import Water
 from metrics.tracker import SimulationMetrics
 
 
@@ -227,6 +228,13 @@ class Simulation:
             else:
                 metrics.idle_steps += 1
 
+            current_resource = self.world.get_cell(agent.x, agent.y).resource
+            if isinstance(current_resource, Water) and agent.thirst > 0:
+                before_thirst = agent.thirst
+                agent.needs.drink(current_resource.drink_amount)
+                metrics.water_drinks += 1
+                metrics.water_units_consumed += before_thirst - agent.thirst
+
             resource = self.world.collect_resource(agent.x, agent.y)
             collected_food = resource is not None
             if collected_food:
@@ -256,6 +264,13 @@ class Simulation:
             metrics.final_thirst = agent.thirst
             metrics.energy_sum += agent.energy
             metrics.energy_samples += 1
+            metrics.health_sum += agent.health
+            metrics.hunger_sum += agent.hunger
+            metrics.thirst_sum += agent.thirst
+            metrics.need_samples += 1
+            metrics.average_health = metrics.health_sum / metrics.need_samples
+            metrics.average_hunger = metrics.hunger_sum / metrics.need_samples
+            metrics.average_thirst = metrics.thirst_sum / metrics.need_samples
             metrics.unique_positions_visited = len(self._visited_positions_by_agent[key])
             self.diagnostic_history_by_agent[key].append({
                 "step": self.steps + 1,
@@ -270,7 +285,8 @@ class Simulation:
             })
             if not agent.alive:
                 metrics.termination_cause = (
-                    "STARVATION" if agent.energy <= 0 else "HEALTH_DEPLETED"
+                    "STARVATION" if agent.energy <= 0
+                    else (agent.needs.last_damage_cause or "HEALTH_DEPLETED")
                 )
 
         self.steps += 1
@@ -296,7 +312,8 @@ class Simulation:
         for agent in self.agents:
             if not agent.alive:
                 self.metrics_by_agent[id(agent)].termination_cause = (
-                    "STARVATION" if agent.energy <= 0 else "HEALTH_DEPLETED"
+                    "STARVATION" if agent.energy <= 0
+                    else (agent.needs.last_damage_cause or "HEALTH_DEPLETED")
                 )
         target_step = self.steps + steps
         while self.steps < target_step:

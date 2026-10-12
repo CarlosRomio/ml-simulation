@@ -57,6 +57,13 @@ class ExperimentSummary:
     maximum_food_per_agent: float = 0.0
     food_collection_stddev: float = 0.0
     average_starved_agents: float = 0.0
+    average_final_health: float = 0.0
+    average_final_hunger: float = 0.0
+    average_final_thirst: float = 0.0
+    average_water_drinks: float = 0.0
+    average_water_units_consumed: float = 0.0
+    average_deaths_by_dehydration: float = 0.0
+    average_deaths_by_starvation: float = 0.0
     average_blocked_movement_attempts: float = 0.0
     average_blocked_by_agent_attempts: float = 0.0
     average_blocked_by_environment_attempts: float = 0.0
@@ -81,6 +88,7 @@ def run_single_simulation(
             height=config.height,
             food_count=config.food_count,
             obstacle_count=config.obstacle_count,
+            water_count=config.water_count,
             reserved_cells={(start_x, start_y)},
             rng=rng,
         )
@@ -326,6 +334,17 @@ class ExperimentRunner:
             maximum_food_per_agent=max(food_counts),
             food_collection_stddev=food_stddev,
             average_starved_agents=sum(result.starvation_agents if result.all_agent_metrics else int(result.agent_metrics.termination_cause == "STARVATION") for result in self.results) / total,
+            average_final_health=average_agent("final_health"),
+            average_final_hunger=average_agent("final_hunger"),
+            average_final_thirst=average_agent("final_thirst"),
+            average_water_drinks=average_agent("water_drinks"),
+            average_water_units_consumed=average_agent("water_units_consumed"),
+            average_deaths_by_dehydration=sum(
+                m.termination_cause == "DEHYDRATION" for m in all_metrics
+            ) / total,
+            average_deaths_by_starvation=sum(
+                m.termination_cause == "STARVATION" for m in all_metrics
+            ) / total,
             average_blocked_movement_attempts=sum(result.blocked_movement_attempts for result in self.results) / total,
             average_blocked_by_agent_attempts=sum(result.blocked_by_agent_attempts for result in self.results) / total,
             average_blocked_by_environment_attempts=sum(result.blocked_by_environment_attempts for result in self.results) / total,

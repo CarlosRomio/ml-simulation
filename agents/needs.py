@@ -17,6 +17,7 @@ class AgentNeeds:
     starvation_threshold: float = 90.0
     dehydration_threshold: float = 90.0
     damage_per_step: float = 1.0
+    last_damage_cause: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("max_health", "max_energy", "max_hunger", "max_thirst"):
@@ -39,14 +40,17 @@ class AgentNeeds:
         self.hunger = min(self.max_hunger, self.hunger + self.hunger_per_step)
         self.thirst = min(self.max_thirst, self.thirst + self.thirst_per_step)
         if self.hunger >= self.starvation_threshold:
-            self.damage(self.damage_per_step)
+            self.damage(self.damage_per_step, cause="STARVATION")
         if self.thirst >= self.dehydration_threshold:
-            self.damage(self.damage_per_step)
+            self.damage(self.damage_per_step, cause="DEHYDRATION")
 
-    def damage(self, amount: float) -> None:
+    def damage(self, amount: float, cause: str | None = None) -> None:
         if amount < 0:
             raise ValueError("O dano não pode ser negativo.")
+        previous_health = self.health
         self.health = max(0.0, self.health - amount)
+        if self.health < previous_health and cause is not None:
+            self.last_damage_cause = cause
 
     def eat(self, amount: float) -> None:
         if amount < 0:

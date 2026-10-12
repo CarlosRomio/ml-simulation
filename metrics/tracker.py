@@ -17,6 +17,15 @@ class SimulationMetrics:
     final_health: float = 100.0
     final_hunger: float = 0.0
     final_thirst: float = 0.0
+    average_health: float = 100.0
+    average_hunger: float = 0.0
+    average_thirst: float = 0.0
+    health_sum: float = 0.0
+    hunger_sum: float = 0.0
+    thirst_sum: float = 0.0
+    need_samples: int = 0
+    water_drinks: int = 0
+    water_units_consumed: float = 0.0
     food_collected: int = 0
     energy_sum: float = 0.0
     energy_samples: int = 0

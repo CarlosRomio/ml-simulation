@@ -55,3 +55,25 @@ class Food:
     @property
     def is_collectible(self) -> bool:
         return True
+
+
+@dataclass
+class Water:
+    """Fonte de água permanente; pode ser atravessada, mas não coletada."""
+    drink_amount: float = 30.0
+
+    def __post_init__(self) -> None:
+        if self.drink_amount <= 0:
+            raise ValueError("drink_amount deve ser positivo.")
+
+    @property
+    def is_walkable(self) -> bool:
+        return True
+
+    @property
+    def is_collectible(self) -> bool:
+        return False
+
+    @property
+    def is_drinkable(self) -> bool:
+        return True

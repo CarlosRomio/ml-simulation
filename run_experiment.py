@@ -67,6 +67,13 @@ def main():
         f"{summary.average_food_collected:.2f}"
     )
     print(f"Energia média: {summary.average_energy:.2f}")
+    print(f"Saúde final média: {summary.average_final_health:.2f}")
+    print(f"Fome final média: {summary.average_final_hunger:.2f}")
+    print(f"Sede final média: {summary.average_final_thirst:.2f}")
+    print(f"Bebidas por agente: {summary.average_water_drinks:.2f}")
+    print(f"Água consumida por agente: {summary.average_water_units_consumed:.2f}")
+    print(f"Mortes por desidratação (média por execução): {summary.average_deaths_by_dehydration:.2f}")
+    print(f"Mortes por inanição/energia (média por execução): {summary.average_deaths_by_starvation:.2f}")
 
     print("\n--- Comportamento ---")
     print(
