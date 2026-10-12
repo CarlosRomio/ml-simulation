@@ -75,6 +75,10 @@ class Simulation:
             self.metrics_by_agent[key] = SimulationMetrics(
                 initial_energy=item.energy,
                 final_energy=item.energy,
+                initial_health=item.health,
+                final_health=item.health,
+                final_hunger=item.hunger,
+                final_thirst=item.thirst,
                 energy_sum=item.energy,
                 energy_samples=1,
             )
@@ -227,6 +231,7 @@ class Simulation:
             collected_food = resource is not None
             if collected_food:
                 agent.eat(FOOD_ENERGY)
+                agent.needs.eat(25.0)
                 metrics.food_collected += 1
                 self.food_collection_steps_by_agent[key].append(self.steps + 1)
                 self._steps_without_food_by_agent[key] = 0
@@ -238,12 +243,17 @@ class Simulation:
                 self._steps_without_food_by_agent[key],
             )
             agent.consume_energy(ENERGY_PER_STEP)
+            agent.needs.advance_step()
+            agent.alive = agent.needs.alive
             metrics.agent_lifetime_steps += 1
 
             self.position_history_by_agent[key].append((agent.x, agent.y))
             self._visited_positions_by_agent[key].add((agent.x, agent.y))
             self.energy_history_by_agent[key].append(agent.energy)
             metrics.final_energy = agent.energy
+            metrics.final_health = agent.health
+            metrics.final_hunger = agent.hunger
+            metrics.final_thirst = agent.thirst
             metrics.energy_sum += agent.energy
             metrics.energy_samples += 1
             metrics.unique_positions_visited = len(self._visited_positions_by_agent[key])
@@ -259,7 +269,9 @@ class Simulation:
                 "distance": displacement,
             })
             if not agent.alive:
-                metrics.termination_cause = "STARVATION"
+                metrics.termination_cause = (
+                    "STARVATION" if agent.energy <= 0 else "HEALTH_DEPLETED"
+                )
 
         self.steps += 1
         seeds_spawned = 0
@@ -283,7 +295,9 @@ class Simulation:
             raise ValueError("O número de passos não pode ser negativo.")
         for agent in self.agents:
             if not agent.alive:
-                self.metrics_by_agent[id(agent)].termination_cause = "STARVATION"
+                self.metrics_by_agent[id(agent)].termination_cause = (
+                    "STARVATION" if agent.energy <= 0 else "HEALTH_DEPLETED"
+                )
         target_step = self.steps + steps
         while self.steps < target_step:
             self.step()

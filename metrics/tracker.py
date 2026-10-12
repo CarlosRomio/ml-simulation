@@ -13,6 +13,10 @@ class SimulationMetrics:
     # Energia e recursos
     initial_energy: float = 0.0
     final_energy: float = 0.0
+    initial_health: float = 100.0
+    final_health: float = 100.0
+    final_hunger: float = 0.0
+    final_thirst: float = 0.0
     food_collected: int = 0
     energy_sum: float = 0.0
     energy_samples: int = 0
@@ -57,6 +61,9 @@ class SimulationMetrics:
             f"Comida coletada: {self.food_collected}\n"
             f"Energia inicial: {self.initial_energy:.1f}\n"
             f"Energia final: {self.final_energy:.1f}\n"
+            f"Vida final: {self.final_health:.1f}\n"
+            f"Fome final: {self.final_hunger:.1f}\n"
+            f"Sede final: {self.final_thirst:.1f}\n"
             f"Energia média: {self.average_energy:.2f}\n"
             f"Passos em movimento: {self.movement_steps}\n"
             f"Passos sem deslocamento: {self.idle_steps}\n"

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from environment.cell import Cell
 from environment.world import World
 from agents.navigation.bfs import find_path
+from agents.needs import AgentNeeds
 
 
 Position = tuple[int, int]
@@ -25,6 +26,7 @@ class Agent:
         max_energy: float = 100.0,
         vision_radius: int = 4,
         rng: Random | None = None,
+        needs: AgentNeeds | None = None,
     ):
         if vision_radius < 0:
             raise ValueError("vision_radius não pode ser negativo")
@@ -35,14 +37,49 @@ class Agent:
         self.target: Position | None = None
         self.path: list[Position] = []
 
-        self.max_energy = max_energy
-        self.energy = max_energy
-        self.alive = True
+        self.needs = needs if needs is not None else AgentNeeds(
+            max_energy=max_energy,
+            energy=max_energy,
+        )
+        self.alive = self.needs.alive
 
         self.vision_radius = vision_radius
         self.visit_counts: dict[Position, int] = {}
 
         self.rng = rng if rng is not None else random
+
+    @property
+    def max_energy(self) -> float:
+        return self.needs.max_energy
+
+    @max_energy.setter
+    def max_energy(self, value: float) -> None:
+        self.needs.max_energy = value
+        self.needs.energy = min(self.needs.energy, value)
+
+    @property
+    def energy(self) -> float:
+        return self.needs.energy
+
+    @energy.setter
+    def energy(self, value: float) -> None:
+        self.needs.energy = max(0.0, min(self.needs.max_energy, value))
+
+    @property
+    def health(self) -> float:
+        return self.needs.health
+
+    @property
+    def hunger(self) -> float:
+        return self.needs.hunger
+
+    @property
+    def thirst(self) -> float:
+        return self.needs.thirst
+
+    def rest(self, amount: float = 5.0) -> None:
+        if self.alive:
+            self.needs.restore_energy(amount)
 
     def consume_energy(self, amount: float = 1.0) -> None:
         if not self.alive:
@@ -57,10 +94,7 @@ class Agent:
         if not self.alive:
             return
 
-        self.energy = min(
-            self.max_energy,
-            self.energy + amount,
-        )
+        self.needs.restore_energy(amount)
 
     def _clear_target(self) -> None:
         self.target = None
