@@ -102,7 +102,7 @@ def run(simulation: Simulation) -> None:
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
-                elif event.key == pygame.K_SPACE and simulation.agent.alive:
+                elif event.key == pygame.K_SPACE and bool(simulation.alive_agents):
                     paused = not paused
                 elif event.key == pygame.K_1:
                     simulation_speed = 1
@@ -112,17 +112,17 @@ def run(simulation: Simulation) -> None:
                     simulation_speed = 3
 
         effective_speed = BASE_SPEED * SPEED_MULTIPLIERS[simulation_speed]
-        if not paused and simulation.agent.alive:
+        if not paused and bool(simulation.alive_agents):
             accumulated_time += elapsed_ms * effective_speed
             while accumulated_time >= 1000:
                 simulation.step()
                 accumulated_time -= 1000
-                if not simulation.agent.alive:
+                if not bool(simulation.alive_agents):
                     accumulated_time = 0.0
                     break
 
         screen.fill(BACKGROUND)
-        agent = simulation.agent
+        agent = next(iter(simulation.alive_agents), simulation.agent)
 
         # A câmera é independente da posição do agente e se move por arraste.
         camera_x = camera.x
@@ -162,15 +162,22 @@ def run(simulation: Simulation) -> None:
         previous_clip = screen.get_clip()
         screen.set_clip(grid_viewport)
         try:
-            agent_renderer.draw(
-                screen,
-                agent,
-                camera_x=camera_x,
-                camera_y=camera_y,
-                cell_size=cell_size,
-                grid_x=grid_x,
-                grid_y=grid_y,
-            )
+            for current_agent in simulation.agents:
+                # Evita desenhar agentes fora da região visível.
+                if not (
+                    camera_x <= current_agent.x < camera_x + visible_world_width
+                    and camera_y <= current_agent.y < camera_y + visible_world_height
+                ):
+                    continue
+                agent_renderer.draw(
+                    screen,
+                    current_agent,
+                    camera_x=camera_x,
+                    camera_y=camera_y,
+                    cell_size=cell_size,
+                    grid_x=grid_x,
+                    grid_y=grid_y,
+                )
         finally:
             screen.set_clip(previous_clip)
         pygame.display.flip()

@@ -1,5 +1,5 @@
 
-from agents.agent import Agent
+from agents.factory import AgentFactory
 from environment.world import World
 from simulation.simulation import Simulation
 from visualization.pygame_app import run
@@ -13,6 +13,7 @@ def main():
         food_density=0.02,
         obstacle_density=0.01,
         vision_radius=6,
+        agent_count=10,
     )
 
     config.validate()
@@ -28,15 +29,17 @@ def main():
         reserved_cells=reserved_cells,
     )
 
-    agent = Agent(
-        x=start_x,
-        y=start_y,
+    agents = AgentFactory.create_agents(
+        world=world,
+        count=config.agent_count,
         vision_radius=config.vision_radius,
+        preferred_position=config.start_position,
+        seed=42,
     )
 
     simulation = Simulation(
         world=world,
-        agent=agent,
+        agents=agents,
     )
 
     print("=== Configuração da simulação ===")
@@ -45,6 +48,7 @@ def main():
     print(f"Comida: {config.food_count}")
     print(f"Obstáculos: {config.obstacle_count}")
     print(f"Posição inicial: {config.start_position}")
+    print(f"Agentes: {config.agent_count}")
     print(f"Raio de visão: {config.vision_radius}")
 
     run(simulation)

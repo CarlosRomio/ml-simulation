@@ -1,9 +1,10 @@
 
 import random
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from math import sqrt
 
-from agents.agent import Agent
+from agents.factory import AgentFactory
 from configuration.simulation_config import SimulationConfig
 from environment.world import World
 from metrics.tracker import SimulationMetrics
@@ -16,6 +17,15 @@ class SimulationRunResult:
     final_plant_count: int
     seeds_spawned: int
     step_reached_plant_limit: int | None
+    all_agent_metrics: list[SimulationMetrics] = field(default_factory=list)
+    surviving_agents: int = 0
+    total_agents: int = 1
+    population_food_collected: int = 0
+    blocked_movement_attempts: int = 0
+    blocked_by_agent_attempts: int = 0
+    blocked_by_environment_attempts: int = 0
+    population_history: list[dict[str, int]] = field(default_factory=list)
+    starvation_agents: int = 0
 
 @dataclass
 class ExperimentSummary:
@@ -40,6 +50,17 @@ class ExperimentSummary:
     average_agent_lifetime_steps: float
 
     runs_reached_plant_limit: int
+    agent_survival_rate: float = 1.0
+    average_surviving_agents: float = 1.0
+    average_population_food_collected: float = 0.0
+    minimum_food_per_agent: float = 0.0
+    maximum_food_per_agent: float = 0.0
+    food_collection_stddev: float = 0.0
+    average_starved_agents: float = 0.0
+    average_blocked_movement_attempts: float = 0.0
+    average_blocked_by_agent_attempts: float = 0.0
+    average_blocked_by_environment_attempts: float = 0.0
+    average_population_alive_by_step: list[float] = field(default_factory=list)
 
 def run_single_simulation(
     config: SimulationConfig,
@@ -68,18 +89,20 @@ def run_single_simulation(
         world.rng = random.Random(run_seed + 1_000_000)
         start_x, start_y = scenario.start_position
 
-    agent = Agent(
-        x=start_x,
-        y=start_y,
+    agents = AgentFactory.create_agents(
+        world=world,
+        count=config.agent_count,
         vision_radius=config.vision_radius,
-        rng=rng,
+        preferred_position=(start_x, start_y),
+        seed=run_seed + 2_000_000,
     )
 
     simulation = Simulation(
         world=world,
-        agent=agent,
+        agents=agents,
         seed_spawn_count=seed_spawn_count,
         max_plants=max_plants,
+        rng=random.Random(run_seed + 3_000_000),
     )
     simulation.run(max_steps)
 
@@ -94,11 +117,22 @@ def run_single_simulation(
         None,
     )
 
+    all_metrics = [simulation.metrics_by_agent[id(agent)] for agent in simulation.agents]
+    surviving_agents = sum(agent.alive for agent in simulation.agents)
     return SimulationRunResult(
         agent_metrics=simulation.metrics,
         final_plant_count=plant_counts["total"],
         seeds_spawned=sum(simulation.seeds_spawned_history),
         step_reached_plant_limit=limit_step,
+        all_agent_metrics=all_metrics,
+        surviving_agents=surviving_agents,
+        total_agents=len(simulation.agents),
+        population_food_collected=sum(m.food_collected for m in all_metrics),
+        blocked_movement_attempts=simulation.blocked_movement_attempts,
+        blocked_by_agent_attempts=simulation.blocked_by_agent_attempts,
+        blocked_by_environment_attempts=simulation.blocked_by_environment_attempts,
+        population_history=list(simulation.population_history),
+        starvation_agents=sum(not agent.alive for agent in simulation.agents),
     )
 
 class ExperimentRunner:
@@ -195,21 +229,38 @@ class ExperimentRunner:
 
         total = len(self.results)
 
-        survived = sum(
-            result.agent_metrics.termination_cause == "STEP_LIMIT"
-            for result in self.results
-        )
+        # Uma execução sobrevive se pelo menos um agente chegar ao limite;
+        # só é considerada inanição quando todos os agentes morrerem.
+        def surviving_count(result: SimulationRunResult) -> int:
+            if result.all_agent_metrics:
+                return result.surviving_agents
+            return int(result.agent_metrics.termination_cause == "STEP_LIMIT")
 
-        starvation = sum(
-            result.agent_metrics.termination_cause == "STARVATION"
-            for result in self.results
-        )
+        survived = sum(surviving_count(result) > 0 for result in self.results)
+        starvation = total - survived
+
+        def metrics_for_result(result: SimulationRunResult) -> list[SimulationMetrics]:
+            # Mantém compatibilidade com resultados construídos em testes antigos.
+            return result.all_agent_metrics or [result.agent_metrics]
+
+        all_metrics = [
+            metrics for result in self.results for metrics in metrics_for_result(result)
+        ]
 
         def average_agent(attribute: str) -> float:
-            return sum(
-                getattr(result.agent_metrics, attribute)
-                for result in self.results
-            ) / total
+            return sum(getattr(metrics, attribute) for metrics in all_metrics) / len(all_metrics)
+
+        food_counts = [metrics.food_collected for metrics in all_metrics]
+        food_mean = sum(food_counts) / len(food_counts)
+        food_stddev = sqrt(sum((value - food_mean) ** 2 for value in food_counts) / len(food_counts))
+        population_histories = [result.population_history for result in self.results if result.population_history]
+        average_alive_by_step: list[float] = []
+        if population_histories:
+            history_length = min(len(history) for history in population_histories)
+            average_alive_by_step = [
+                sum(history[step_index]["alive"] for history in population_histories) / len(population_histories)
+                for step_index in range(history_length)
+            ]
 
         reached_limit = [
             result.step_reached_plant_limit
@@ -259,6 +310,26 @@ class ExperimentRunner:
             average_agent_lifetime_steps=average_agent("agent_lifetime_steps"),
             
             runs_reached_plant_limit=len(reached_limit),
+            agent_survival_rate=(
+                sum(surviving_count(result) for result in self.results)
+                / sum((result.total_agents if result.all_agent_metrics else 1) for result in self.results)
+                if sum((result.total_agents if result.all_agent_metrics else 1) for result in self.results) > 0
+                else 0.0
+            ),
+            average_surviving_agents=(
+                sum(surviving_count(result) for result in self.results) / total
+            ),
+            average_population_food_collected=(
+                sum((result.population_food_collected if result.all_agent_metrics else result.agent_metrics.food_collected) for result in self.results) / total
+            ),
+            minimum_food_per_agent=min(food_counts),
+            maximum_food_per_agent=max(food_counts),
+            food_collection_stddev=food_stddev,
+            average_starved_agents=sum(result.starvation_agents if result.all_agent_metrics else int(result.agent_metrics.termination_cause == "STARVATION") for result in self.results) / total,
+            average_blocked_movement_attempts=sum(result.blocked_movement_attempts for result in self.results) / total,
+            average_blocked_by_agent_attempts=sum(result.blocked_by_agent_attempts for result in self.results) / total,
+            average_blocked_by_environment_attempts=sum(result.blocked_by_environment_attempts for result in self.results) / total,
+            average_population_alive_by_step=average_alive_by_step,
         )
 
 

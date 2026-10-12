@@ -1,4 +1,4 @@
-"""Renderização do agente independente da câmera."""
+"""Renderização de agentes independente da câmera."""
 
 import pygame
 
@@ -21,4 +21,5 @@ class AgentRenderer:
             grid_x + round((agent.x - camera_x) * cell_size) + cell_size // 2,
             grid_y + round((agent.y - camera_y) * cell_size) + cell_size // 2,
         )
-        pygame.draw.circle(screen, AGENT_COLOR, center, max(3, cell_size // 3))
+        color = AGENT_COLOR if agent.alive else (115, 115, 115)
+        pygame.draw.circle(screen, color, center, max(3, cell_size // 3))

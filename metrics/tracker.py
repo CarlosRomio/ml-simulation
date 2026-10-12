@@ -24,6 +24,12 @@ class SimulationMetrics:
     unique_positions_visited: int = 0
     max_steps_without_food: int = 0
 
+    # Interação multiagente
+    movement_attempts: int = 0
+    blocked_movement_attempts: int = 0
+    blocked_by_agent_attempts: int = 0
+    blocked_by_environment_attempts: int = 0
+
     @property
     def survived(self) -> bool:
         return self.termination_cause == "STEP_LIMIT"
@@ -57,4 +63,8 @@ class SimulationMetrics:
             f"Distância percorrida: {self.distance_travelled:.2f}\n"
             f"Posições únicas visitadas: {self.unique_positions_visited}\n"
             f"Maior intervalo sem comida: {self.max_steps_without_food} passos\n"
+            f"Tentativas de movimento: {self.movement_attempts}\n"
+            f"Movimentos bloqueados: {self.blocked_movement_attempts}\n"
+            f"Bloqueios por agentes: {self.blocked_by_agent_attempts}\n"
+            f"Bloqueios pelo ambiente: {self.blocked_by_environment_attempts}\n"
         )
