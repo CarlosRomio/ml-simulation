@@ -9,15 +9,17 @@ class AgentNeeds:
     max_energy: float = 100.0
     energy: float = 100.0
     max_hunger: float = 100.0
-    hunger: float = 0.0
+    hunger: float = 20.0
     max_thirst: float = 100.0
-    thirst: float = 0.0
-    hunger_per_step: float = 0.1
-    thirst_per_step: float = 0.1
+    thirst: float = 20.0
+    hunger_per_step: float = 0.25
+    thirst_per_step: float = 0.2
     starvation_threshold: float = 90.0
     dehydration_threshold: float = 90.0
     damage_per_step: float = 1.0
     last_damage_cause: str | None = None
+    dehydration_damage_per_step: float | None = None
+    starvation_damage_per_step: float | None = None
 
     def __post_init__(self) -> None:
         for name in ("max_health", "max_energy", "max_hunger", "max_thirst"):
@@ -26,6 +28,10 @@ class AgentNeeds:
         for name in ("hunger_per_step", "thirst_per_step", "damage_per_step"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} não pode ser negativo.")
+        for name in ("dehydration_damage_per_step", "starvation_damage_per_step"):
+            value = getattr(self, name)
+            if value is not None and value < 0:
+                raise ValueError(f"{name} não pode ser negativo.")
         for value_name, max_name in (("health", "max_health"), ("energy", "max_energy"), ("hunger", "max_hunger"), ("thirst", "max_thirst")):
             value = getattr(self, value_name)
             if not 0 <= value <= getattr(self, max_name):
@@ -33,16 +39,19 @@ class AgentNeeds:
 
     @property
     def alive(self) -> bool:
-        return self.health > 0 and self.energy > 0
+        return self.health > 0
 
     def advance_step(self) -> None:
         """Aumenta fome/sede e aplica dano quando atingem níveis críticos."""
+        self.last_damage_cause = None
         self.hunger = min(self.max_hunger, self.hunger + self.hunger_per_step)
         self.thirst = min(self.max_thirst, self.thirst + self.thirst_per_step)
         if self.hunger >= self.starvation_threshold:
-            self.damage(self.damage_per_step, cause="STARVATION")
+            amount = self.damage_per_step if self.starvation_damage_per_step is None else self.starvation_damage_per_step
+            self.damage(amount, cause="STARVATION")
         if self.thirst >= self.dehydration_threshold:
-            self.damage(self.damage_per_step, cause="DEHYDRATION")
+            amount = self.damage_per_step if self.dehydration_damage_per_step is None else self.dehydration_damage_per_step
+            self.damage(amount, cause="DEHYDRATION")
 
     def damage(self, amount: float, cause: str | None = None) -> None:
         if amount < 0:

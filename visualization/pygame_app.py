@@ -22,6 +22,7 @@ from visualization.rendering_config import (
     VIEW_WIDTH,
 )
 from visualization.renderers.agent_renderer import AgentRenderer
+from visualization.renderers.animal_renderer import AnimalRenderer
 from visualization.renderers.sidebar_renderer import SidebarRenderer
 from visualization.renderers.world_renderer import WorldRenderer
 
@@ -44,7 +45,7 @@ def run(simulation: Simulation) -> None:
     grid_x = SIDEBAR_WIDTH + GRID_PADDING * 2
     grid_y = GRID_PADDING
     window_width = grid_x + grid_width + GRID_PADDING
-    window_height = max(grid_height + GRID_PADDING * 2, 680)
+    window_height = max(grid_height + GRID_PADDING * 2, 850)
 
     screen = pygame.display.set_mode((window_width, window_height))
     pygame.display.set_caption("ML Simulation - Survival")
@@ -52,6 +53,7 @@ def run(simulation: Simulation) -> None:
 
     world_renderer = WorldRenderer()
     agent_renderer = AgentRenderer()
+    animal_renderer = AnimalRenderer()
     sidebar_renderer = SidebarRenderer()
     camera = Camera(world.width, world.height, view_width, view_height)
     camera.configure_viewport(grid_width, grid_height, cell_size)
@@ -102,7 +104,7 @@ def run(simulation: Simulation) -> None:
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
-                elif event.key == pygame.K_SPACE and bool(simulation.alive_agents):
+                elif event.key == pygame.K_SPACE and (bool(simulation.alive_agents) or bool(simulation.alive_herbivores)):
                     paused = not paused
                 elif event.key == pygame.K_1:
                     simulation_speed = 1
@@ -112,12 +114,12 @@ def run(simulation: Simulation) -> None:
                     simulation_speed = 3
 
         effective_speed = BASE_SPEED * SPEED_MULTIPLIERS[simulation_speed]
-        if not paused and bool(simulation.alive_agents):
+        if not paused and (bool(simulation.alive_agents) or bool(simulation.alive_herbivores)):
             accumulated_time += elapsed_ms * effective_speed
             while accumulated_time >= 1000:
                 simulation.step()
                 accumulated_time -= 1000
-                if not bool(simulation.alive_agents):
+                if not (bool(simulation.alive_agents) or bool(simulation.alive_herbivores)):
                     accumulated_time = 0.0
                     break
 
@@ -178,6 +180,12 @@ def run(simulation: Simulation) -> None:
                     grid_x=grid_x,
                     grid_y=grid_y,
                 )
+            for animal in simulation.herbivores:
+                if not (camera_x <= animal.x < camera_x + visible_world_width and
+                        camera_y <= animal.y < camera_y + visible_world_height):
+                    continue
+                animal_renderer.draw(screen, animal, camera_x=camera_x, camera_y=camera_y,
+                                     cell_size=cell_size, grid_x=grid_x, grid_y=grid_y)
         finally:
             screen.set_clip(previous_clip)
         pygame.display.flip()

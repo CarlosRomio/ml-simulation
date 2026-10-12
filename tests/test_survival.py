@@ -19,7 +19,7 @@ def test_eating_restores_energy():
     agent.consume_energy(50)
     agent.eat(25)
 
-    assert agent.energy == 75.0
+    assert agent.energy == 65.0
     assert agent.alive
 
 
@@ -31,23 +31,23 @@ def test_energy_does_not_exceed_maximum():
     assert agent.energy == 100.0
 
 
-def test_agent_dies_at_zero_energy():
+def test_agent_remains_alive_at_zero_stamina():
     agent = Agent(x=0, y=0)
 
     agent.consume_energy(100)
 
     assert agent.energy == 0.0
-    assert not agent.alive
+    assert agent.alive
 
 
-def test_dead_agent_cannot_recover_energy():
+def test_food_can_restore_stamina_when_depleted():
     agent = Agent(x=0, y=0)
 
     agent.consume_energy(100)
     agent.eat(25)
 
-    assert agent.energy == 0.0
-    assert not agent.alive
+    assert agent.energy == 15.0
+    assert agent.alive
 
 def test_environment_continues_when_agent_dies():
     world = World(
@@ -57,7 +57,8 @@ def test_environment_continues_when_agent_dies():
     )
 
     agent = Agent(x=5, y=5)
-    agent.consume_energy(100)
+    agent.needs.damage(100, cause="STARVATION")
+    agent.alive = False
 
     simulation = Simulation(
         world,

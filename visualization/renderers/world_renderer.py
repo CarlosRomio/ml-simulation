@@ -3,7 +3,7 @@
 import pygame
 
 from environment.obstacles import ObstacleType
-from environment.resources import Plant, PlantState
+from environment.resources import Plant, PlantState, Water
 from visualization.rendering_config import (
     CELL_COLOR,
     FOOD_COLOR,
@@ -75,6 +75,8 @@ class WorldRenderer:
                         self._draw_rock(screen, rect, cell_size)
                     elif isinstance(cell.resource, Plant):
                         self._draw_plant(screen, rect, cell.resource.state, cell_size)
+                    elif isinstance(cell.resource, Water):
+                        self._draw_water(screen, rect, cell_size)
                     elif cell.resource is not None:
                         # Compatibilidade visual com recursos antigos, como Food.
                         pygame.draw.circle(
@@ -117,6 +119,17 @@ class WorldRenderer:
             ROCK_COLOR,
             rect.inflate(-max(4, cell_size // 5), -max(4, cell_size // 4)),
         )
+
+
+    @staticmethod
+    def _draw_water(screen: pygame.Surface, rect: pygame.Rect, cell_size: int) -> None:
+        """Desenha uma fonte de água azul, distinguível das plantas maduras."""
+        water_rect = rect.inflate(-max(3, cell_size // 7), -max(3, cell_size // 5))
+        pygame.draw.ellipse(screen, (35, 116, 177), water_rect)
+        highlight = pygame.Rect(0, 0, max(3, cell_size // 3), max(2, cell_size // 8))
+        highlight.center = (rect.centerx - cell_size // 10, rect.centery - cell_size // 8)
+        pygame.draw.ellipse(screen, (112, 205, 238), highlight)
+        pygame.draw.arc(screen, (68, 165, 214), water_rect, 0.15, 2.8, max(1, cell_size // 18))
 
     @staticmethod
     def _draw_plant(

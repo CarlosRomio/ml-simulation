@@ -2,6 +2,9 @@
 
 import pygame
 
+from agents.species import Species
+from environment.resources import Water
+
 from visualization.rendering_config import (
     CELL_COLOR,
     ENERGY_COLOR,
@@ -36,7 +39,8 @@ class SidebarRenderer:
 
         agent = next(iter(simulation.alive_agents), simulation.agent)
         alive_count = len(simulation.alive_agents)
-        if alive_count == 0:
+        animal_count = len(simulation.alive_herbivores)
+        if alive_count == 0 and animal_count == 0:
             status, status_color = "POPULAÇÃO MORTA", ENERGY_LOW_COLOR
         elif paused:
             status, status_color = "PAUSADO", MUTED_COLOR
@@ -55,20 +59,25 @@ class SidebarRenderer:
 
         self._text(screen, "MÉTRICAS", 185, self.small_font, MUTED_COLOR)
         self._text(screen, f"Passos: {simulation.steps}", 212)
-        self._text(screen, f"Agentes vivos: {alive_count}/{len(simulation.agents)}", 238, self.small_font)
+        self._text(screen, f"Humanos: {alive_count}/{len(simulation.agents)}", 238, self.small_font)
         self._text(screen, f"Plantas: {plant_counts['total']}", 265)
-        self._text(screen, f"  Sementes: {plant_counts['seeds']}", 291, self.small_font)
-        self._text(screen, f"  Crescendo: {plant_counts['growing']}", 314, self.small_font)
-        self._text(screen, f"  Maduras: {plant_counts['mature']}", 337, self.small_font)
+        water_count = len(simulation.world.get_water_positions())
+        herbivores = animal_count
+        self._text(screen, f"Água: {water_count} fontes", 286, self.small_font, (90, 190, 235))
+        self._text(screen, f"Herbívoros: {herbivores}/{len(simulation.herbivores)}", 308, self.small_font, (126, 210, 112))
+        self._text(screen, f"Ataques: {simulation.attacks} | Caças: {simulation.animals_killed}", 423, self.small_font)
+        self._text(screen, f"  Sementes: {plant_counts['seeds']}", 333, self.small_font)
+        self._text(screen, f"  Crescendo: {plant_counts['growing']}", 355, self.small_font)
+        self._text(screen, f"  Maduras: {plant_counts['mature']}", 377, self.small_font)
         total_food = sum(m.food_collected for m in simulation.metrics_by_agent.values())
-        self._text(screen, f"Coletada: {total_food}", 362)
+        self._text(screen, f"Coletada: {total_food}", 400)
 
-        self._text(screen, "ENERGIA (AGENTE)", 402, self.small_font, MUTED_COLOR)
+        self._text(screen, "ESTAMINA (AGENTE)", 448, self.small_font, MUTED_COLOR)
         ratio = agent.energy / agent.max_energy if agent.max_energy > 0 else 0.0
         ratio = max(0.0, min(1.0, ratio))
-        self._text(screen, f"{agent.energy:.0f} / {agent.max_energy:.0f}", 427)
+        self._text(screen, f"{agent.energy:.0f} / {agent.max_energy:.0f}", 473)
 
-        bar_rect = pygame.Rect(GRID_PADDING, 458, SIDEBAR_WIDTH - GRID_PADDING * 2, 16)
+        bar_rect = pygame.Rect(GRID_PADDING, 504, SIDEBAR_WIDTH - GRID_PADDING * 2, 16)
         pygame.draw.rect(screen, CELL_COLOR, bar_rect)
         fill_rect = pygame.Rect(
             bar_rect.x, bar_rect.y, int(bar_rect.width * ratio), bar_rect.height
@@ -78,14 +87,35 @@ class SidebarRenderer:
             pygame.draw.rect(screen, energy_color, fill_rect)
         pygame.draw.rect(screen, GRID_COLOR, bar_rect, width=1)
 
-        self._text(screen, "VELOCIDADE", 490, self.small_font, MUTED_COLOR)
-        self._text(screen, f"{effective_speed:g} passos/s", 515)
-        self._text(screen, "CONTROLES", 550, self.small_font, MUTED_COLOR)
-        self._text(screen, "1 - Normal", 575, self.small_font)
-        self._text(screen, "2 - Rápido", 598, self.small_font)
-        self._text(screen, "3 - Turbo", 621, self.small_font)
-        self._text(screen, "ESPAÇO - Pausar", 644, self.small_font)
-        self._text(screen, "ESC - Encerrar", 667, self.small_font)
+
+        self._text(screen, "FOME", 532, self.small_font, MUTED_COLOR)
+        self._text(screen, f"{agent.hunger:.1f} / {agent.needs.max_hunger:.0f}", 553, self.small_font)
+        hunger_ratio = max(0.0, min(1.0, agent.hunger / agent.needs.max_hunger))
+        hunger_rect = pygame.Rect(GRID_PADDING, 575, SIDEBAR_WIDTH - GRID_PADDING * 2, 10)
+        pygame.draw.rect(screen, CELL_COLOR, hunger_rect)
+        if hunger_ratio > 0:
+            hunger_color = (225, 100, 85) if agent.hunger >= agent.needs.starvation_threshold else (220, 170, 80)
+            pygame.draw.rect(screen, hunger_color, pygame.Rect(hunger_rect.x, hunger_rect.y, int(hunger_rect.width * hunger_ratio), hunger_rect.height))
+        pygame.draw.rect(screen, GRID_COLOR, hunger_rect, width=1)
+
+        self._text(screen, "SEDE", 593, self.small_font, MUTED_COLOR)
+        self._text(screen, f"{agent.thirst:.1f} / {agent.needs.max_thirst:.0f}", 614, self.small_font)
+        thirst_ratio = max(0.0, min(1.0, agent.thirst / agent.needs.max_thirst))
+        thirst_rect = pygame.Rect(GRID_PADDING, 636, SIDEBAR_WIDTH - GRID_PADDING * 2, 10)
+        pygame.draw.rect(screen, CELL_COLOR, thirst_rect)
+        if thirst_ratio > 0:
+            thirst_color = (225, 100, 85) if agent.thirst >= agent.needs.dehydration_threshold else (90, 190, 235)
+            pygame.draw.rect(screen, thirst_color, pygame.Rect(thirst_rect.x, thirst_rect.y, int(thirst_rect.width * thirst_ratio), thirst_rect.height))
+        pygame.draw.rect(screen, GRID_COLOR, thirst_rect, width=1)
+
+        self._text(screen, "VELOCIDADE", 596, self.small_font, MUTED_COLOR)
+        self._text(screen, f"{effective_speed:g} passos/s", 687)
+        self._text(screen, "CONTROLES", 644, self.small_font, MUTED_COLOR)
+        self._text(screen, "1 - Normal", 667, self.small_font)
+        self._text(screen, "2 - Rápido", 690, self.small_font)
+        self._text(screen, "3 - Turbo", 713, self.small_font)
+        self._text(screen, "ESPAÇO - Pausar", 736, self.small_font)
+        self._text(screen, "ESC - Encerrar", 759, self.small_font)
 
     @staticmethod
     def _text(

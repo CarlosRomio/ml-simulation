@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from math import sqrt
 
 from agents.factory import AgentFactory
+from animals.factory import HerbivoreFactory, CarnivoreFactory
 from configuration.simulation_config import SimulationConfig
 from environment.world import World
 from metrics.tracker import SimulationMetrics
@@ -26,6 +27,14 @@ class SimulationRunResult:
     blocked_by_environment_attempts: int = 0
     population_history: list[dict[str, int]] = field(default_factory=list)
     starvation_agents: int = 0
+    living_herbivores: int = 0
+    living_carnivores: int = 0
+    human_hunt_attacks: int = 0
+    carnivore_attacks: int = 0
+    herbivores_killed: int = 0
+    humans_killed_by_carnivores: int = 0
+    human_defense_attacks: int = 0
+    carnivores_killed: int = 0
 
 @dataclass
 class ExperimentSummary:
@@ -103,11 +112,33 @@ def run_single_simulation(
         vision_radius=config.vision_radius,
         preferred_position=(start_x, start_y),
         seed=run_seed + 2_000_000,
+        thirst_per_step=config.thirst_per_step,
+        dehydration_threshold=config.dehydration_threshold,
+        dehydration_damage_per_step=config.dehydration_damage_per_step,
+    )
+
+    occupied_positions = {(agent.x, agent.y) for agent in agents}
+    herbivores = HerbivoreFactory.create(
+        world=world,
+        count=config.herbivore_count,
+        vision_radius=config.vision_radius,
+        seed=run_seed + 4_000_000,
+        occupied_positions=occupied_positions,
+    )
+    occupied_positions.update((animal.x, animal.y) for animal in herbivores)
+    carnivores = CarnivoreFactory.create(
+        world=world,
+        count=config.carnivore_count,
+        vision_radius=config.vision_radius,
+        seed=run_seed + 5_000_000,
+        occupied_positions=occupied_positions,
     )
 
     simulation = Simulation(
         world=world,
         agents=agents,
+        herbivores=herbivores,
+        carnivores=carnivores,
         seed_spawn_count=seed_spawn_count,
         max_plants=max_plants,
         rng=random.Random(run_seed + 3_000_000),
@@ -141,6 +172,14 @@ def run_single_simulation(
         blocked_by_environment_attempts=simulation.blocked_by_environment_attempts,
         population_history=list(simulation.population_history),
         starvation_agents=sum(not agent.alive for agent in simulation.agents),
+        living_herbivores=len(simulation.alive_herbivores),
+        living_carnivores=len(simulation.alive_carnivores),
+        human_hunt_attacks=simulation.attacks,
+        carnivore_attacks=simulation.carnivore_attacks,
+        herbivores_killed=simulation.animals_killed,
+        humans_killed_by_carnivores=simulation.humans_killed_by_carnivores,
+        human_defense_attacks=simulation.human_defense_attacks,
+        carnivores_killed=simulation.carnivores_killed,
     )
 
 class ExperimentRunner:

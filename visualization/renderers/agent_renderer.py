@@ -3,6 +3,7 @@
 import pygame
 
 from visualization.rendering_config import AGENT_COLOR
+from agents.species import Species
 
 
 class AgentRenderer:
@@ -21,5 +22,12 @@ class AgentRenderer:
             grid_x + round((agent.x - camera_x) * cell_size) + cell_size // 2,
             grid_y + round((agent.y - camera_y) * cell_size) + cell_size // 2,
         )
-        color = AGENT_COLOR if agent.alive else (115, 115, 115)
-        pygame.draw.circle(screen, color, center, max(3, cell_size // 3))
+        if not agent.alive:
+            color = (115, 115, 115)
+        elif agent.species == Species.HERBIVORE:
+            color = (126, 210, 112)
+        else:
+            color = AGENT_COLOR
+        radius = max(3, cell_size // 3)
+        pygame.draw.circle(screen, color, center, radius)
+        pygame.draw.circle(screen, (24, 34, 28), center, radius, width=max(1, cell_size // 18))

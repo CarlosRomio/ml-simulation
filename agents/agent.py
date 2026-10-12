@@ -2,13 +2,13 @@ import random
 
 from random import Random
 from collections.abc import Callable
-from collections.abc import Callable
 
 from environment.cell import Cell
 from environment.world import World
 from agents.navigation.bfs import find_path
 from agents.needs import AgentNeeds
 from environment.resources import Water
+from agents.species import Species
 
 
 Position = tuple[int, int]
@@ -28,12 +28,16 @@ class Agent:
         vision_radius: int = 4,
         rng: Random | None = None,
         needs: AgentNeeds | None = None,
+        species: Species = Species.HUMAN,
     ):
         if vision_radius < 0:
             raise ValueError("vision_radius não pode ser negativo")
 
         self.x = x
         self.y = y
+        self.species = Species(species)
+        self.hunt_target: Position | None = None
+        self.running = False
 
         self.target: Position | None = None
         self.path: list[Position] = []
@@ -88,14 +92,14 @@ class Agent:
 
         self.energy = max(0.0, self.energy - amount)
 
-        if self.energy <= 0:
-            self.alive = False
+        # Energia é estamina: chegar a zero impede corrida, mas não mata.
 
     def eat(self, amount: float) -> None:
         if not self.alive:
             return
 
-        self.needs.restore_energy(amount)
+        self.needs.eat(amount)
+        self.needs.restore_energy(amount * 0.6)
 
     def _clear_target(self) -> None:
         self.target = None
@@ -109,49 +113,43 @@ class Agent:
     ) -> None:
         current_position = (self.x, self.y)
 
-        water_cells = [
-            cell for cell in nearby_cells
-            if isinstance(cell.resource, Water)
-            and (cell.x, cell.y) != current_position
-        ]
-        food_cells = [
-            cell for cell in nearby_cells
+        if self.hunt_target is not None:
+            path = pathfinder(world, current_position, self.hunt_target)
+            if path is not None and len(path) > 1:
+                self.target = self.hunt_target
+                self.path = path
+                return
+            self.hunt_target = None
+
+        # Necessidades competem por prioridade. Cada categoria é tentada em
+        # ordem; se todos os alvos estiverem inacessíveis, tenta-se a próxima.
+        target_groups: list[list[Position]] = []
+        if self.thirst >= 40.0:
+            target_groups.append(world.get_water_positions())
+        food_positions = [
+            (cell.x, cell.y)
+            for row in world.grid
+            for cell in row
             if cell.resource is not None
             and cell.resource.is_collectible
             and (cell.x, cell.y) != current_position
         ]
-        # Em sede crítica, procurar água tem prioridade sobre comida.
-        if self.thirst >= 50.0:
-            # Fontes conhecidas no mapa são alvos mesmo fora do raio de visão.
-            water_positions = world.get_water_positions()
-            self.rng.shuffle(water_positions)
-            for candidate in water_positions:
+        target_groups.append(food_positions)
+        if 25.0 <= self.thirst < 40.0:
+            target_groups.append(world.get_water_positions())
+
+        for candidates in target_groups:
+            candidates = list(candidates)
+            self.rng.shuffle(candidates)
+            candidates.sort(
+                key=lambda position: abs(position[0] - self.x) + abs(position[1] - self.y)
+            )
+            for candidate in candidates:
                 path = pathfinder(world, current_position, candidate)
                 if path is not None and len(path) > 1:
                     self.target = candidate
                     self.path = path
                     return
-            candidates = water_cells
-        else:
-            candidates = food_cells
-
-        # Embaralha os candidatos para não favorecer sempre
-        # a mesma ordem de varredura das células.
-        self.rng.shuffle(food_cells)
-
-        for cell in food_cells:
-            candidate = (cell.x, cell.y)
-
-            path = pathfinder(
-                world,
-                current_position,
-                candidate,
-            )
-
-            if path is not None and len(path) > 1:
-                self.target = candidate
-                self.path = path
-                return
 
         self._clear_target()
 
@@ -171,7 +169,7 @@ class Agent:
             self._clear_target()
 
         # Sede alta invalida um alvo de comida para permitir procurar água.
-        if self.thirst >= 50.0 and self.target is not None:
+        if self.thirst >= 40.0 and self.target is not None:
             target_cell = world.get_cell(*self.target)
             if not isinstance(target_cell.resource, Water):
                 self._clear_target()

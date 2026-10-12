@@ -14,7 +14,14 @@ class SimulationConfig:
 
     # Configuração da população
     agent_count: int = 1
+    herbivore_count: int = 0
+    carnivore_count: int = 0
     vision_radius: int = 6
+
+    # Parâmetros fisiológicos (mantêm os valores atuais por padrão)
+    thirst_per_step: float = 0.2
+    dehydration_threshold: float = 90.0
+    dehydration_damage_per_step: float | None = None
 
     @property
     def area(self) -> int:
@@ -48,10 +55,20 @@ class SimulationConfig:
         if self.food_density + self.obstacle_density + self.water_density >= 1:
             raise ValueError("A soma das densidades deve ser menor que 1.")
         if self.agent_count < 1:
-            raise ValueError("A quantidade de agentes deve ser positiva.")
-        if self.agent_count + self.food_count + self.obstacle_count + self.water_count > self.area:
+            raise ValueError("A quantidade de agentes humanos deve ser positiva.")
+        if self.herbivore_count < 0:
+            raise ValueError("A quantidade de herbívoros não pode ser negativa.")
+        if self.carnivore_count < 0:
+            raise ValueError("A quantidade de carnívoros não pode ser negativa.")
+        if self.agent_count + self.herbivore_count + self.carnivore_count + self.food_count + self.obstacle_count + self.water_count > self.area:
             raise ValueError(
                 "Não há células suficientes para agentes, recursos e obstáculos."
             )
         if self.vision_radius < 0:
             raise ValueError("O raio de visão não pode ser negativo.")
+        if self.thirst_per_step < 0:
+            raise ValueError("thirst_per_step não pode ser negativo.")
+        if not 0 <= self.dehydration_threshold <= 100:
+            raise ValueError("dehydration_threshold deve estar entre 0 e 100.")
+        if self.dehydration_damage_per_step is not None and self.dehydration_damage_per_step < 0:
+            raise ValueError("dehydration_damage_per_step não pode ser negativo.")

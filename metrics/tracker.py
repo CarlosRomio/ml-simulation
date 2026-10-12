@@ -17,6 +17,9 @@ class SimulationMetrics:
     final_health: float = 100.0
     final_hunger: float = 0.0
     final_thirst: float = 0.0
+    critical_thirst_steps: int = 0
+    dehydration_damage_steps: int = 0
+    first_dehydration_damage_step: int | None = None
     average_health: float = 100.0
     average_hunger: float = 0.0
     average_thirst: float = 0.0
@@ -54,12 +57,12 @@ class SimulationMetrics:
         return self.energy_sum / self.energy_samples
 
     def report(self) -> str:
-        if self.termination_cause == "STARVATION":
-            final_state = "MORTO"
-        elif self.termination_cause == "STEP_LIMIT":
+        if self.termination_cause == "STEP_LIMIT":
             final_state = "SOBREVIVEU AO LIMITE"
+        elif self.termination_cause == "RUNNING":
+            final_state = "EM EXECUÇÃO"
         else:
-            final_state = "INCOMPLETO"
+            final_state = "MORTO"
 
         return (
             "\n=== Resultado da simulação ===\n"
