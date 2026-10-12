@@ -45,7 +45,7 @@ def run(simulation: Simulation) -> None:
     grid_x = SIDEBAR_WIDTH + GRID_PADDING * 2
     grid_y = GRID_PADDING
     window_width = grid_x + grid_width + GRID_PADDING
-    window_height = max(grid_height + GRID_PADDING * 2, 850)
+    window_height = max(grid_height + GRID_PADDING * 2, 900)
 
     screen = pygame.display.set_mode((window_width, window_height))
     pygame.display.set_caption("ML Simulation - Survival")
@@ -60,6 +60,7 @@ def run(simulation: Simulation) -> None:
     grid_viewport = pygame.Rect(grid_x, grid_y, grid_width, grid_height)
     dragging_camera = False
     last_mouse_position: tuple[int, int] | None = None
+    mouse_down_position: tuple[int, int] | None = None
 
     running = True
     paused = False
@@ -76,12 +77,21 @@ def run(simulation: Simulation) -> None:
                 if grid_viewport.collidepoint(event.pos):
                     dragging_camera = True
                     last_mouse_position = event.pos
+                    mouse_down_position = event.pos
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                if mouse_down_position is not None and abs(event.pos[0] - mouse_down_position[0]) <= 5 and abs(event.pos[1] - mouse_down_position[1]) <= 5 and grid_viewport.collidepoint(event.pos):
+                    selected_position = camera.screen_to_world(event.pos[0], event.pos[1], grid_x, grid_y)
+                    selected = next((item for item in simulation.agents if (item.x, item.y) == selected_position), None)
+                    if selected is not None:
+                        simulation.observed_agent = selected
                 dragging_camera = False
                 last_mouse_position = None
+                mouse_down_position = None
             elif event.type == pygame.MOUSEWHEEL:
                 mouse_position = pygame.mouse.get_pos()
-                if grid_viewport.collidepoint(mouse_position):
+                if mouse_position[0] < SIDEBAR_WIDTH:
+                    sidebar_renderer.scroll(event.y)
+                elif grid_viewport.collidepoint(mouse_position):
                     zoom_step = 3 if event.y > 0 else -3
                     new_cell_size = max(
                         MIN_CELL_SIZE,
@@ -104,7 +114,7 @@ def run(simulation: Simulation) -> None:
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
-                elif event.key == pygame.K_SPACE and (bool(simulation.alive_agents) or bool(simulation.alive_herbivores)):
+                elif event.key == pygame.K_SPACE and (bool(simulation.alive_agents) or bool(simulation.alive_herbivores) or bool(simulation.alive_carnivores)):
                     paused = not paused
                 elif event.key == pygame.K_1:
                     simulation_speed = 1
@@ -114,17 +124,17 @@ def run(simulation: Simulation) -> None:
                     simulation_speed = 3
 
         effective_speed = BASE_SPEED * SPEED_MULTIPLIERS[simulation_speed]
-        if not paused and (bool(simulation.alive_agents) or bool(simulation.alive_herbivores)):
+        if not paused and (bool(simulation.alive_agents) or bool(simulation.alive_herbivores) or bool(simulation.alive_carnivores)):
             accumulated_time += elapsed_ms * effective_speed
             while accumulated_time >= 1000:
                 simulation.step()
                 accumulated_time -= 1000
-                if not (bool(simulation.alive_agents) or bool(simulation.alive_herbivores)):
+                if not (bool(simulation.alive_agents) or bool(simulation.alive_herbivores) or bool(simulation.alive_carnivores)):
                     accumulated_time = 0.0
                     break
 
         screen.fill(BACKGROUND)
-        agent = next(iter(simulation.alive_agents), simulation.agent)
+        agent = simulation.observed_agent
 
         # A câmera é independente da posição do agente e se move por arraste.
         camera_x = camera.x
@@ -179,6 +189,7 @@ def run(simulation: Simulation) -> None:
                     cell_size=cell_size,
                     grid_x=grid_x,
                     grid_y=grid_y,
+                    selected=current_agent is simulation.observed_agent,
                 )
             for animal in simulation.herbivores:
                 if not (camera_x <= animal.x < camera_x + visible_world_width and

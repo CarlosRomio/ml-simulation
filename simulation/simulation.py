@@ -9,12 +9,12 @@ from animals.carnivore import Carnivore
 from agents.navigation.bfs import find_path
 from agents.perception import Perception
 from environment.world import World
-from environment.resources import Water, Plant, PlantState
+from environment.resources import MaterialKind, MaterialResource, Water, Plant, PlantState, Food
 from metrics.tracker import SimulationMetrics
 
 
 FOOD_ENERGY = 35.0
-ENERGY_PER_STEP = 1.0  # custo legado; caminhar não consome estamina
+ENERGY_PER_STEP = 1.0  # custo de estamina por célula percorrida
 RUN_STAMINA_COST = 4.0
 ATTACK_STAMINA_COST = 8.0
 ATTACK_DAMAGE = 30.0
@@ -79,8 +79,14 @@ class Simulation:
         self.human_defense_attacks = 0
         self.carnivores_killed = 0
         self.humans_killed_by_carnivores = 0
+        self.herbivores_died_by_starvation = 0
+        self.herbivores_died_by_dehydration = 0
+        self.carnivores_died_by_starvation = 0
+        self.carnivores_died_by_dehydration = 0
         # Compatibilidade temporária com código e testes de agente único.
         self.agent = self.agents[0]
+        # Agente explicitamente observado pela interface; não é uma média populacional.
+        self.observed_agent = self.agent
         self.steps = 0
         self.step_duration_seconds = step_duration_seconds
         self.seed_spawn_count = seed_spawn_count
@@ -99,7 +105,7 @@ class Simulation:
         self.blocked_movement_attempts = 0
         self.blocked_by_agent_attempts = 0
         self.blocked_by_environment_attempts = 0
-        self.population_history: list[dict[str, int]] = []
+        self.population_history: list[dict[str, int | float]] = []
 
         for index, item in enumerate(self.agents):
             key = id(item)
@@ -109,10 +115,20 @@ class Simulation:
                 final_energy=item.energy,
                 initial_health=item.health,
                 final_health=item.health,
+                initial_hunger=item.hunger,
                 final_hunger=item.hunger,
+                initial_thirst=item.thirst,
                 final_thirst=item.thirst,
+                health_sum=item.health,
+                hunger_sum=item.hunger,
+                thirst_sum=item.thirst,
+                need_samples=1,
                 energy_sum=item.energy,
                 energy_samples=1,
+                average_health=item.health,
+                average_hunger=item.hunger,
+                average_thirst=item.thirst,
+                unique_positions_visited=1,
             )
             self.energy_history_by_agent[key] = [item.energy]
             self.position_history_by_agent[key] = [initial_position]
@@ -129,6 +145,9 @@ class Simulation:
 
         self.resource_history: list[dict[str, int]] = []
         self.seeds_spawned_history: list[int] = []
+        # Série ecológica combinando estoque observado e eventos ocorridos em cada passo.
+        self.ecology_history: list[dict[str, int | float]] = []
+        self._current_resource_events = self._empty_resource_events()
         self._record_resource_metrics(seeds_spawned=0)
         self._record_population_metrics()
 
@@ -148,9 +167,67 @@ class Simulation:
     def population_survival_rate(self) -> float:
         return len(self.alive_agents) / len(self.agents)
 
+    @staticmethod
+    def _empty_resource_events() -> dict[str, int | float]:
+        return {
+            "plants_seed_to_growing": 0,
+            "plants_growing_to_mature": 0,
+            "plants_collected_by_humans": 0,
+            "plants_collected_by_herbivores": 0,
+            "food_items_collected_by_humans": 0,
+            "wood_units_collected_by_humans": 0.0,
+            "stone_units_collected_by_humans": 0.0,
+            "fiber_units_collected_by_humans": 0.0,
+            "water_drinks_humans": 0,
+            "water_drinks_herbivores": 0,
+            "water_drinks_carnivores": 0,
+            "water_thirst_reduction_humans": 0.0,
+            "water_thirst_reduction_herbivores": 0.0,
+            "water_thirst_reduction_carnivores": 0.0,
+            "seeds_spawn_requested": 0,
+            "seeds_spawned": 0,
+            "seeds_blocked_by_plant_cap": 0,
+            "seeds_blocked_by_space": 0,
+        }
+
     def _record_resource_metrics(self, seeds_spawned: int) -> None:
-        self.resource_history.append({"step": self.steps, **self.world.get_plant_counts()})
+        snapshot = {"step": self.steps, **self.world.get_plant_counts()}
+        self.resource_history.append(snapshot)
         self.seeds_spawned_history.append(seeds_spawned)
+        ecology_row = {
+            **snapshot,
+            **self.world.get_material_counts(),
+            "water_sources": len(self.world.get_water_positions()),
+            **self._current_resource_events,
+        }
+        self.ecology_history.append(ecology_row)
+
+    def _record_collection_event(self, resource, collector: str) -> None:
+        if isinstance(resource, Plant):
+            key = (
+                "plants_collected_by_humans"
+                if collector == "human"
+                else "plants_collected_by_herbivores"
+            )
+            self._current_resource_events[key] += 1
+        elif isinstance(resource, Food) and collector == "human":
+            self._current_resource_events["food_items_collected_by_humans"] += 1
+        elif isinstance(resource, MaterialResource) and collector == "human":
+            key = f"{resource.kind.value}_units_collected_by_humans"
+            self._current_resource_events[key] += resource.quantity
+
+    def _record_water_event(self, species: str, thirst_before: float, thirst_after: float) -> None:
+        drinks_key = f"water_drinks_{species}"
+        units_key = f"water_thirst_reduction_{species}"
+        self._current_resource_events[drinks_key] += 1
+        self._current_resource_events[units_key] += max(0.0, thirst_before - thirst_after)
+
+    @staticmethod
+    def _mean_need(individuals, attribute: str) -> float:
+        """Média do estado dos indivíduos vivos; zero quando não há vivos."""
+        if not individuals:
+            return 0.0
+        return sum(float(getattr(item, attribute)) for item in individuals) / len(individuals)
 
     def _record_population_metrics(self) -> None:
         self.population_history.append({
@@ -160,24 +237,52 @@ class Simulation:
             "food_collected": sum(m.food_collected for m in self.metrics_by_agent.values()),
             "herbivores_alive": len(self.alive_herbivores),
             "carnivores_alive": len(self.alive_carnivores),
+            "human_mean_health": self._mean_need(self.alive_agents, "health"),
+            "human_mean_hunger": self._mean_need(self.alive_agents, "hunger"),
+            "human_mean_thirst": self._mean_need(self.alive_agents, "thirst"),
+            "human_mean_energy": self._mean_need(self.alive_agents, "energy"),
+            "human_all_mean_health": self._mean_need(self.agents, "health"),
+            "human_all_mean_hunger": self._mean_need(self.agents, "hunger"),
+            "human_all_mean_thirst": self._mean_need(self.agents, "thirst"),
+            "human_all_mean_energy": self._mean_need(self.agents, "energy"),
+            "herbivore_mean_health": self._mean_need(self.alive_herbivores, "health"),
+            "herbivore_mean_hunger": self._mean_need(self.alive_herbivores, "hunger"),
+            "herbivore_mean_thirst": self._mean_need(self.alive_herbivores, "thirst"),
+            "herbivore_all_mean_health": self._mean_need(self.herbivores, "health"),
+            "herbivore_all_mean_hunger": self._mean_need(self.herbivores, "hunger"),
+            "herbivore_all_mean_thirst": self._mean_need(self.herbivores, "thirst"),
+            "carnivore_mean_health": self._mean_need(self.alive_carnivores, "health"),
+            "carnivore_mean_hunger": self._mean_need(self.alive_carnivores, "hunger"),
+            "carnivore_mean_thirst": self._mean_need(self.alive_carnivores, "thirst"),
+            "carnivore_all_mean_health": self._mean_need(self.carnivores, "health"),
+            "carnivore_all_mean_hunger": self._mean_need(self.carnivores, "hunger"),
+            "carnivore_all_mean_thirst": self._mean_need(self.carnivores, "thirst"),
         })
 
     def _advance_environment(self) -> None:
         self.steps += 1
         seeds_spawned = 0
         if self.steps % self.resource_update_interval == 0:
-            self.world.advance_resources()
+            transitions = self.world.advance_resources()
+            self._current_resource_events["plants_seed_to_growing"] += transitions["seed_to_growing"]
+            self._current_resource_events["plants_growing_to_mature"] += transitions["growing_to_mature"]
             occupied = (
                 {(a.x, a.y) for a in self.alive_agents}
                 | {(h.x, h.y) for h in self.alive_herbivores}
                 | {(c.x, c.y) for c in self.alive_carnivores}
             )
-            seeds_spawned = self.world.spawn_seeds(
+            spawn_report = self.world.spawn_seeds_with_report(
                 count=self.seed_spawn_count,
                 max_plants=self.max_plants,
                 occupied_cells=occupied,
             )
+            seeds_spawned = spawn_report["spawned"]
+            self._current_resource_events["seeds_spawn_requested"] += spawn_report["requested"]
+            self._current_resource_events["seeds_spawned"] += spawn_report["spawned"]
+            self._current_resource_events["seeds_blocked_by_plant_cap"] += spawn_report["blocked_by_plant_cap"]
+            self._current_resource_events["seeds_blocked_by_space"] += spawn_report["blocked_by_space"]
         self._record_resource_metrics(seeds_spawned)
+        self._record_population_metrics()
         for metrics in self.metrics_by_agent.values():
             metrics.steps = self.steps
             metrics.simulated_time_seconds = self.steps * self.step_duration_seconds
@@ -251,6 +356,7 @@ class Simulation:
         return moved_by_id
 
     def step(self) -> None:
+        self._current_resource_events = self._empty_resource_events()
         alive_at_start = self.alive_agents
         if not alive_at_start and not self.alive_herbivores and not self.alive_carnivores:
             self._advance_environment()
@@ -258,6 +364,11 @@ class Simulation:
 
         before = {id(a): (a.x, a.y) for a in alive_at_start}
         energy_before = {id(a): a.energy for a in alive_at_start}
+        physiology_before = {
+            id(a): {"health": a.health, "hunger": a.hunger, "thirst": a.thirst, "energy": a.energy}
+            for a in alive_at_start
+        }
+        damage_before = {id(a): dict(a.needs.damage_by_cause) for a in alive_at_start}
         actions: dict[int, tuple[int, int]] = {}
 
         # All agents choose actions from the same pre-movement world state.
@@ -315,17 +426,46 @@ class Simulation:
             else:
                 metrics.idle_steps += 1
 
+            food_energy_recovered = 0.0
+            movement_energy_cost = 0.0
+            rest_energy_recovered = 0.0
+            drank_water = False
+            water_thirst_reduction = 0.0
+            collected_resource_type = "NONE"
             current_resource = self.world.get_cell(agent.x, agent.y).resource
             if isinstance(current_resource, Water) and agent.thirst > 0:
+                drank_water = True
                 before_thirst = agent.thirst
                 agent.needs.drink(current_resource.drink_amount)
                 metrics.water_drinks += 1
-                metrics.water_units_consumed += before_thirst - agent.thirst
+                consumed = before_thirst - agent.thirst
+                water_thirst_reduction = consumed
+                metrics.water_units_consumed += consumed
+                self._record_water_event("humans", before_thirst, agent.thirst)
 
-            resource = self.world.collect_resource(agent.x, agent.y)
-            collected_food = resource is not None
+            collection_quantity = None
+            if isinstance(current_resource, MaterialResource):
+                capacity_units = agent.inventory.max_collectible_units(current_resource.kind)
+                collection_quantity = min(1, capacity_units) if capacity_units > 0 else 0
+            resource = (
+                self.world.collect_resource(agent.x, agent.y, quantity=collection_quantity)
+                if not isinstance(current_resource, MaterialResource) or collection_quantity > 0
+                else None
+            )
+            if resource is not None:
+                if isinstance(resource, Plant):
+                    collected_resource_type = "PLANT"
+                elif isinstance(resource, Food):
+                    collected_resource_type = "FOOD"
+                elif isinstance(resource, MaterialResource):
+                    collected_resource_type = resource.kind.value.upper()
+                    agent.inventory.add_resource(resource)
+                self._record_collection_event(resource, "human")
+            collected_food = isinstance(resource, (Plant, Food))
             if collected_food:
+                energy_before_food = agent.energy
                 agent.eat(FOOD_ENERGY)
+                food_energy_recovered = agent.energy - energy_before_food
                 metrics.food_collected += 1
                 self.food_collection_steps_by_agent[key].append(self.steps + 1)
                 self._steps_without_food_by_agent[key] = 0
@@ -337,14 +477,29 @@ class Simulation:
                 self._steps_without_food_by_agent[key],
             )
             if agent.running and moved:
+                energy_before_cost = agent.energy
                 agent.consume_energy(RUN_STAMINA_COST)
-            elif not moved:
+                movement_energy_cost = energy_before_cost - agent.energy
+            elif moved:
+                energy_before_cost = agent.energy
+                agent.consume_energy(ENERGY_PER_STEP * displacement)
+                movement_energy_cost = energy_before_cost - agent.energy
+            else:
+                energy_before_rest = agent.energy
                 agent.rest(2.0)
+                rest_energy_recovered = agent.energy - energy_before_rest
             health_before_needs = agent.health
             agent.needs.advance_step()
+            health_after_physiology = agent.health
+            if agent.hunger >= agent.needs.starvation_threshold:
+                metrics.critical_hunger_steps += 1
             if agent.thirst >= agent.needs.dehydration_threshold:
                 metrics.critical_thirst_steps += 1
-            if agent.health < health_before_needs and agent.needs.last_damage_cause == "DEHYDRATION":
+            if "STARVATION" in agent.needs.last_damage_causes:
+                metrics.starvation_damage_steps += 1
+                if metrics.first_starvation_damage_step is None:
+                    metrics.first_starvation_damage_step = self.steps + 1
+            if "DEHYDRATION" in agent.needs.last_damage_causes:
                 metrics.dehydration_damage_steps += 1
                 if metrics.first_dehydration_damage_step is None:
                     metrics.first_dehydration_damage_step = self.steps + 1
@@ -378,15 +533,37 @@ class Simulation:
                 "energy_before": energy_before[key],
                 "energy_after": agent.energy,
                 "collected_food": collected_food,
+                "collected_resource_type": collected_resource_type,
+                "inventory_weight": agent.inventory.current_weight,
+                "inventory_wood": agent.inventory.quantity_of(MaterialKind.WOOD),
+                "inventory_stone": agent.inventory.quantity_of(MaterialKind.STONE),
+                "inventory_fiber": agent.inventory.quantity_of(MaterialKind.FIBER),
+                "drank_water": drank_water,
+                "water_thirst_reduction": water_thirst_reduction,
                 "action": actions[key],
                 "moved": moved,
                 "distance": displacement,
+                "health_before": physiology_before[key]["health"],
+                "health_after_physiology": health_after_physiology,
+                "hunger_before": physiology_before[key]["hunger"],
+                "hunger_after_physiology": agent.hunger,
+                "thirst_before": physiology_before[key]["thirst"],
+                "thirst_after_physiology": agent.thirst,
+                "movement_energy_cost": movement_energy_cost,
+                "food_energy_recovered": food_energy_recovered,
+                "rest_energy_recovered": rest_energy_recovered,
+                "energy_after_actions": agent.energy,
+                "damage_causes": list(agent.needs.last_damage_causes),
             })
             if not agent.alive:
-                metrics.termination_cause = (
-                    "STARVATION" if agent.energy <= 0
-                    else (agent.needs.last_damage_cause or "HEALTH_DEPLETED")
-                )
+                causes = set(agent.needs.last_damage_causes)
+                physiological_causes = causes.intersection({"STARVATION", "DEHYDRATION"})
+                if physiological_causes == {"STARVATION", "DEHYDRATION"}:
+                    metrics.termination_cause = "STARVATION_AND_DEHYDRATION"
+                elif physiological_causes:
+                    metrics.termination_cause = next(iter(physiological_causes))
+                else:
+                    metrics.termination_cause = agent.needs.last_damage_cause or "HEALTH_DEPLETED"
 
         # Humanos atacam herbívoros adjacentes apenas quando estão caçando.
         for agent in self.alive_agents:
@@ -420,12 +597,22 @@ class Simulation:
                 occupied_animals.add((animal.x, animal.y))
             resource = self.world.get_cell(animal.x, animal.y).resource
             if isinstance(resource, Water) and animal.thirst > 0:
+                thirst_before = animal.thirst
                 animal.drink(resource.drink_amount)
+                self._record_water_event("herbivores", thirst_before, animal.thirst)
             elif isinstance(resource, Plant) and resource.state == PlantState.MATURE and animal.hunger >= 20:
-                self.world.collect_resource(animal.x, animal.y)
-                animal.eat(35.0)
+                collected_plant = self.world.collect_resource(animal.x, animal.y)
+                if collected_plant is not None:
+                    self._record_collection_event(collected_plant, "herbivore")
+                    animal.eat(35.0)
+            was_alive = animal.alive
             animal.needs.advance_step()
             animal.alive = animal.needs.alive
+            if was_alive and not animal.alive:
+                if "STARVATION" in animal.needs.last_damage_causes:
+                    self.herbivores_died_by_starvation += 1
+                if "DEHYDRATION" in animal.needs.last_damage_causes:
+                    self.herbivores_died_by_dehydration += 1
 
         # Carnívoros procuram presas vivas (humanos e herbívoros), sem ocupar
         # células de outras entidades. O combate é resolvido após o movimento.
@@ -441,9 +628,17 @@ class Simulation:
                 self.world.move_agent(carnivore, action)
             resource = self.world.get_cell(carnivore.x, carnivore.y).resource
             if isinstance(resource, Water) and carnivore.thirst > 0:
+                thirst_before = carnivore.thirst
                 carnivore.drink(resource.drink_amount)
+                self._record_water_event("carnivores", thirst_before, carnivore.thirst)
+            was_alive = carnivore.alive
             carnivore.needs.advance_step()
             carnivore.alive = carnivore.needs.alive
+            if was_alive and not carnivore.alive:
+                if "STARVATION" in carnivore.needs.last_damage_causes:
+                    self.carnivores_died_by_starvation += 1
+                if "DEHYDRATION" in carnivore.needs.last_damage_causes:
+                    self.carnivores_died_by_dehydration += 1
 
         # Humanos podem se defender se um carnívoro entrar em alcance corpo a corpo.
         # Defesa não exige fome; ataque de caça a herbívoro continua sendo outra ação.
@@ -517,25 +712,26 @@ class Simulation:
             metrics.final_health = agent.health
             metrics.final_hunger = agent.hunger
             metrics.final_thirst = agent.thirst
+            for cause, cumulative in agent.needs.damage_by_cause.items():
+                delta = cumulative - damage_before[key].get(cause, 0.0)
+                if delta > 0:
+                    metrics.damage_taken_by_cause[cause] = metrics.damage_taken_by_cause.get(cause, 0.0) + delta
+            if self.diagnostic_history_by_agent[key]:
+                diagnostic = self.diagnostic_history_by_agent[key][-1]
+                diagnostic["health_after"] = agent.health
+                diagnostic["hunger_after"] = agent.hunger
+                diagnostic["thirst_after"] = agent.thirst
+                diagnostic["energy_after"] = agent.energy
+                diagnostic["energy_change_after_combat"] = agent.energy - diagnostic["energy_after_actions"]
+                diagnostic["termination_cause"] = metrics.termination_cause if not agent.alive else "RUNNING"
+                diagnostic["damage_causes"] = list(agent.needs.last_damage_causes)
+                diagnostic["damage_by_cause"] = {
+                    cause: cumulative - damage_before[key].get(cause, 0.0)
+                    for cause, cumulative in agent.needs.damage_by_cause.items()
+                    if cumulative - damage_before[key].get(cause, 0.0) > 0
+                }
 
-        self.steps += 1
-        seeds_spawned = 0
-        if self.steps % self.resource_update_interval == 0:
-            self.world.advance_resources()
-            occupied = ({(a.x, a.y) for a in self.alive_agents}
-                        | {(h.x, h.y) for h in self.alive_herbivores}
-                        | {(c.x, c.y) for c in self.alive_carnivores})
-            seeds_spawned = self.world.spawn_seeds(
-                count=self.seed_spawn_count,
-                max_plants=self.max_plants,
-                occupied_cells=occupied,
-            )
-        self._record_resource_metrics(seeds_spawned)
-        self._record_population_metrics()
-
-        for metrics in self.metrics_by_agent.values():
-            metrics.steps = self.steps
-            metrics.simulated_time_seconds = self.steps * self.step_duration_seconds
+        self._advance_environment()
 
     def run(self, steps: int) -> None:
         if steps < 0:
@@ -545,10 +741,14 @@ class Simulation:
                 metrics = self.metrics_by_agent[id(agent)]
                 if metrics.termination_cause == "PREDATION":
                     continue
-                metrics.termination_cause = (
-                    "STARVATION" if agent.energy <= 0
-                    else (agent.needs.last_damage_cause or "HEALTH_DEPLETED")
-                )
+                causes = set(agent.needs.last_damage_causes)
+                physiological_causes = causes.intersection({"STARVATION", "DEHYDRATION"})
+                if physiological_causes == {"STARVATION", "DEHYDRATION"}:
+                    metrics.termination_cause = "STARVATION_AND_DEHYDRATION"
+                elif physiological_causes:
+                    metrics.termination_cause = next(iter(physiological_causes))
+                else:
+                    metrics.termination_cause = agent.needs.last_damage_cause or "HEALTH_DEPLETED"
         target_step = self.steps + steps
         while self.steps < target_step:
             self.step()

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum, auto
+from math import isfinite
 
 
 class PlantState(Enum):
@@ -77,3 +78,44 @@ class Water:
     @property
     def is_drinkable(self) -> bool:
         return True
+
+
+class MaterialKind(Enum):
+    """Materiais coletáveis usados em mecânicas futuras de construção."""
+
+    WOOD = "wood"
+    STONE = "stone"
+    FIBER = "fiber"
+
+    @property
+    def unit_weight(self) -> float:
+        return {
+            MaterialKind.WOOD: 1.0,
+            MaterialKind.STONE: 2.0,
+            MaterialKind.FIBER: 0.5,
+        }[self]
+
+
+@dataclass
+class MaterialResource:
+    """Depósito de material numa célula; pode ser recolhido parcialmente."""
+
+    kind: MaterialKind
+    quantity: float = 3.0
+
+    def __post_init__(self) -> None:
+        self.kind = MaterialKind(self.kind)
+        if not isfinite(self.quantity) or self.quantity <= 0:
+            raise ValueError("A quantidade de material deve ser finita e positiva.")
+
+    @property
+    def unit_weight(self) -> float:
+        return self.kind.unit_weight
+
+    @property
+    def is_walkable(self) -> bool:
+        return True
+
+    @property
+    def is_collectible(self) -> bool:
+        return self.quantity > 0

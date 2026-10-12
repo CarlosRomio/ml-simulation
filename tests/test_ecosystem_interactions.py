@@ -122,7 +122,7 @@ def test_needs_reach_critical_state_and_eventually_kill_agent_without_resources(
     simulation.run(400)
     assert not human.alive
     assert human.health == 0
-    assert simulation.metrics.termination_cause in {"STARVATION", "DEHYDRATION"}
+    assert simulation.metrics.termination_cause in {"STARVATION", "DEHYDRATION", "STARVATION_AND_DEHYDRATION"}
     assert simulation.metrics.critical_thirst_steps > 0
 
 

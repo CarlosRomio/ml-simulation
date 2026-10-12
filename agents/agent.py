@@ -7,7 +7,8 @@ from environment.cell import Cell
 from environment.world import World
 from agents.navigation.bfs import find_path
 from agents.needs import AgentNeeds
-from environment.resources import Water
+from environment.resources import MaterialKind, MaterialResource, Water
+from agents.inventory import Inventory
 from agents.species import Species
 
 
@@ -29,6 +30,7 @@ class Agent:
         rng: Random | None = None,
         needs: AgentNeeds | None = None,
         species: Species = Species.HUMAN,
+        inventory: Inventory | None = None,
     ):
         if vision_radius < 0:
             raise ValueError("vision_radius não pode ser negativo")
@@ -52,6 +54,7 @@ class Agent:
         self.visit_counts: dict[Position, int] = {}
 
         self.rng = rng if rng is not None else random
+        self.inventory = inventory if inventory is not None else Inventory()
 
     @property
     def max_energy(self) -> float:
@@ -87,6 +90,8 @@ class Agent:
             self.needs.restore_energy(amount)
 
     def consume_energy(self, amount: float = 1.0) -> None:
+        if amount < 0:
+            raise ValueError("O consumo de energia não pode ser negativo.")
         if not self.alive:
             return
 
@@ -100,6 +105,13 @@ class Agent:
 
         self.needs.eat(amount)
         self.needs.restore_energy(amount * 0.6)
+
+    def can_collect_resource(self, resource: object) -> bool:
+        if not getattr(resource, "is_collectible", False):
+            return False
+        if isinstance(resource, MaterialResource):
+            return self.inventory.max_collectible_units(resource.kind) >= 1
+        return True
 
     def _clear_target(self) -> None:
         self.target = None
@@ -131,7 +143,8 @@ class Agent:
             for row in world.grid
             for cell in row
             if cell.resource is not None
-            and cell.resource.is_collectible
+            and not isinstance(cell.resource, MaterialResource)
+            and self.can_collect_resource(cell.resource)
             and (cell.x, cell.y) != current_position
         ]
         target_groups.append(food_positions)
@@ -162,6 +175,11 @@ class Agent:
         self._record_position()
         current_position = (self.x, self.y)
         if self.thirst >= 1.0 and isinstance(world.get_cell(*current_position).resource, Water):
+            return (0, 0)
+
+        current_resource = world.get_cell(*current_position).resource
+        if isinstance(current_resource, MaterialResource) and self.can_collect_resource(current_resource):
+            # Permanece no depósito para recolher material em lotes de uma unidade.
             return (0, 0)
 
         # O agente chegou ao destino.

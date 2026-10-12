@@ -19,7 +19,7 @@ def test_metrics_initialization():
     assert simulation.metrics.simulated_time_seconds == 0.0
     assert simulation.metrics.average_energy == 100.0
     assert simulation.metrics.distance_travelled == 0.0
-    assert simulation.metrics.unique_positions_visited == 0
+    assert simulation.metrics.unique_positions_visited == 1
 
 
 def test_metrics_track_steps():
@@ -31,7 +31,7 @@ def test_metrics_track_steps():
     simulation.step()
 
     assert simulation.metrics.steps == 2
-    assert simulation.metrics.final_energy == 100.0
+    assert simulation.metrics.final_energy == 98.0
     assert simulation.metrics.simulated_time_seconds == 2.0
 
 
@@ -45,7 +45,8 @@ def test_metrics_track_starvation():
 
     # Estamina zerada limita corrida, mas não é uma causa de morte.
     assert simulation.metrics.termination_cause == "RUNNING"
-    assert simulation.metrics.final_energy >= 1.0
+    assert simulation.metrics.final_energy == 0.0
+    assert agent.alive  # Estamina zerada não é uma causa de morte.
 
 
 def test_metrics_track_simulated_time():
@@ -72,8 +73,8 @@ def test_metrics_track_energy_average():
     simulation.step()
     simulation.step()
 
-# Caminhar não consome estamina.
-    assert simulation.metrics.average_energy == 100.0
+# A média inclui o estado inicial e os estados finais de cada passo.
+    assert simulation.metrics.average_energy == 99.0
 
 
 def test_metrics_track_stationary_agent():

@@ -3,7 +3,7 @@
 import pygame
 
 from environment.obstacles import ObstacleType
-from environment.resources import Plant, PlantState, Water
+from environment.resources import MaterialKind, MaterialResource, Plant, PlantState, Water
 from visualization.rendering_config import (
     CELL_COLOR,
     FOOD_COLOR,
@@ -15,6 +15,9 @@ from visualization.rendering_config import (
     TREE_LEAF_COLOR,
     TREE_TRUNK_COLOR,
     UNSEEN_OVERLAY,
+    WOOD_RESOURCE_COLOR,
+    STONE_RESOURCE_COLOR,
+    FIBER_RESOURCE_COLOR,
 )
 
 
@@ -77,6 +80,24 @@ class WorldRenderer:
                         self._draw_plant(screen, rect, cell.resource.state, cell_size)
                     elif isinstance(cell.resource, Water):
                         self._draw_water(screen, rect, cell_size)
+                    elif isinstance(cell.resource, MaterialResource):
+                        material_color = {
+                            MaterialKind.WOOD: WOOD_RESOURCE_COLOR,
+                            MaterialKind.STONE: STONE_RESOURCE_COLOR,
+                            MaterialKind.FIBER: FIBER_RESOURCE_COLOR,
+                        }[cell.resource.kind]
+                        pygame.draw.circle(
+                            screen, material_color, rect.center, max(3, cell_size // 5)
+                        )
+                        if cell_size >= 20:
+                            label = {
+                                MaterialKind.WOOD: "M",
+                                MaterialKind.STONE: "P",
+                                MaterialKind.FIBER: "F",
+                            }[cell.resource.kind]
+                            font = pygame.font.SysFont("consolas", max(10, cell_size // 3), bold=True)
+                            text = font.render(label, True, (30, 32, 35))
+                            screen.blit(text, text.get_rect(center=rect.center))
                     elif cell.resource is not None:
                         # Compatibilidade visual com recursos antigos, como Food.
                         pygame.draw.circle(

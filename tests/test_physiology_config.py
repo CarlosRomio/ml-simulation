@@ -13,9 +13,13 @@ def test_physiology_config_reaches_agents_and_metrics():
         thirst_per_step=2.5,
         dehydration_threshold=60.0,
         dehydration_damage_per_step=4.0,
+        hunger_per_step=1.5,
+        starvation_threshold=70.0,
+        starvation_damage_per_step=2.0,
     )
     result = run_single_simulation(config, run_seed=4, max_steps=3, seed_spawn_count=0)
     metrics = result.all_agent_metrics[0]
 # Starts at thirst 20; with no water, the configured per-step increase is visible.
     assert metrics.final_thirst == 27.5
     assert metrics.critical_thirst_steps == 0
+    assert metrics.final_hunger == 24.5

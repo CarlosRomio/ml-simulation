@@ -69,7 +69,8 @@ def test_experiment_summary_aggregates_behavior_metrics():
 
     assert summary.total_runs == 2
     assert summary.survived_runs == 1
-    assert summary.starvation_runs == 1
+    assert summary.starvation_runs == 1  # compatibilidade: significa extinção da execução
+    assert summary.extinction_runs == 1
     assert summary.survival_rate == 0.5
 
     assert summary.average_steps == 8.0

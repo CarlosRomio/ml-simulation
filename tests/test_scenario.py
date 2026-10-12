@@ -42,3 +42,24 @@ if __name__ == "__main__":
     test_same_seed_creates_same_scenario()
     test_worlds_from_same_scenario_are_independent()
     print("Todos os testes de cenário passaram!")
+
+
+def test_scenario_factory_places_reproducible_material_resources():
+    from environment.resources import MaterialResource
+
+    config = SimulationConfig(
+        width=20, height=20, food_density=0.02, obstacle_density=0.01,
+        water_density=0.01, wood_density=0.02, stone_density=0.015,
+    )
+    scenario_a = ScenarioFactory.create(config, seed=123)
+    scenario_b = ScenarioFactory.create(config, seed=123)
+    assert scenario_a == scenario_b
+
+    world = scenario_a.to_world()
+    materials = [
+        cell.resource for row in world.grid for cell in row
+        if isinstance(cell.resource, MaterialResource)
+    ]
+    assert sum(item.kind.value == "wood" for item in materials) == config.wood_count
+    assert sum(item.kind.value == "stone" for item in materials) == config.stone_count
+    assert all(2 <= item.quantity <= 5 for item in materials)

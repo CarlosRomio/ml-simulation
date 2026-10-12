@@ -1,5 +1,5 @@
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -15,11 +15,17 @@ class SimulationMetrics:
     final_energy: float = 0.0
     initial_health: float = 100.0
     final_health: float = 100.0
+    initial_hunger: float = 20.0
     final_hunger: float = 0.0
+    initial_thirst: float = 20.0
     final_thirst: float = 0.0
+    critical_hunger_steps: int = 0
     critical_thirst_steps: int = 0
+    starvation_damage_steps: int = 0
     dehydration_damage_steps: int = 0
+    first_starvation_damage_step: int | None = None
     first_dehydration_damage_step: int | None = None
+    damage_taken_by_cause: dict[str, float] = field(default_factory=dict)
     average_health: float = 100.0
     average_hunger: float = 0.0
     average_thirst: float = 0.0
@@ -76,6 +82,9 @@ class SimulationMetrics:
             f"Vida final: {self.final_health:.1f}\n"
             f"Fome final: {self.final_hunger:.1f}\n"
             f"Sede final: {self.final_thirst:.1f}\n"
+            f"Passos com fome crítica: {self.critical_hunger_steps}\n"
+            f"Passos com sede crítica: {self.critical_thirst_steps}\n"
+            f"Dano por causa: {self.damage_taken_by_cause}\n"
             f"Energia média: {self.average_energy:.2f}\n"
             f"Passos em movimento: {self.movement_steps}\n"
             f"Passos sem deslocamento: {self.idle_steps}\n"

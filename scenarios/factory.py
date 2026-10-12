@@ -26,7 +26,8 @@ class ScenarioFactory:
             if (x, y) not in reserved_cells
         ]
 
-        required_cells = config.food_count + config.obstacle_count + config.water_count
+        required_cells = (config.food_count + config.obstacle_count + config.water_count
+                          + config.wood_count + config.stone_count)
 
         if required_cells > len(all_positions):
             raise ValueError(
@@ -37,7 +38,13 @@ class ScenarioFactory:
 
         food_positions_raw = selected[:config.food_count]
         water_positions_raw = selected[config.food_count:config.food_count + config.water_count]
-        obstacle_positions_raw = selected[config.food_count + config.water_count:]
+        obstacle_start = config.food_count + config.water_count
+        obstacle_end = obstacle_start + config.obstacle_count
+        obstacle_positions_raw = selected[obstacle_start:obstacle_end]
+        wood_start = obstacle_end
+        wood_end = wood_start + config.wood_count
+        wood_positions_raw = selected[wood_start:wood_end]
+        stone_positions_raw = selected[wood_end:wood_end + config.stone_count]
 
         food_positions = tuple(
             (x, y, 1.0)
@@ -59,4 +66,8 @@ class ScenarioFactory:
             water_positions=tuple(water_positions_raw),
             start_position=start_position,
             seed=seed,
+            material_positions=tuple(
+                [(x, y, "wood", float(rng.randint(2, 5))) for x, y in wood_positions_raw]
+                + [(x, y, "stone", float(rng.randint(2, 5))) for x, y in stone_positions_raw]
+            ),
         )

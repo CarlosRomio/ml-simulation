@@ -18,9 +18,12 @@ class AgentFactory:
         preferred_position: tuple[int, int] | None = None,
         seed: int | None = None,
         species: Species = Species.HUMAN,
-        thirst_per_step: float = 0.1,
+        thirst_per_step: float = 0.2,
         dehydration_threshold: float = 90.0,
         dehydration_damage_per_step: float | None = None,
+        hunger_per_step: float = 0.25,
+        starvation_threshold: float = 90.0,
+        starvation_damage_per_step: float | None = None,
     ) -> list[Agent]:
         """Cria agentes com espécie e parâmetros fisiológicos configuráveis.
 
@@ -37,8 +40,11 @@ class AgentFactory:
 
         # AgentNeeds valida os parâmetros fisiológicos, inclusive valores negativos.
         needs_template = AgentNeeds(
+            hunger_per_step=hunger_per_step,
             thirst_per_step=thirst_per_step,
+            starvation_threshold=starvation_threshold,
             dehydration_threshold=dehydration_threshold,
+            starvation_damage_per_step=starvation_damage_per_step,
             dehydration_damage_per_step=dehydration_damage_per_step,
         )
 
@@ -68,8 +74,11 @@ class AgentFactory:
         for index, (x, y) in enumerate(positions):
             agent_seed = None if seed is None else seed + 1_000_003 * (index + 1)
             needs = AgentNeeds(
+                hunger_per_step=needs_template.hunger_per_step,
                 thirst_per_step=needs_template.thirst_per_step,
+                starvation_threshold=needs_template.starvation_threshold,
                 dehydration_threshold=needs_template.dehydration_threshold,
+                starvation_damage_per_step=needs_template.starvation_damage_per_step,
                 dehydration_damage_per_step=needs_template.dehydration_damage_per_step,
             )
             agents.append(

@@ -1,11 +1,12 @@
 
 import random
+from math import isfinite
 
 from random import Random
 
 from environment.cell import Cell
 from environment.obstacles import ObstacleType
-from environment.resources import Plant, PlantState, Water
+from environment.resources import MaterialKind, MaterialResource, Plant, PlantState, Water
 
 
 class World:
@@ -18,11 +19,13 @@ class World:
         reserved_cells: set[tuple[int, int]] | None = None,
         rng: Random | None = None,
         water_count: int = 0,
+        wood_count: int = 0,
+        stone_count: int = 0,
     ):
         if width < 1 or height < 1:
             raise ValueError("As dimensões do mundo devem ser positivas.")
 
-        if food_count < 0 or obstacle_count < 0 or water_count < 0:
+        if min(food_count, obstacle_count, water_count, wood_count, stone_count) < 0:
             raise ValueError("Comida e obstáculos não podem ser negativos.")
 
         self.width = width
@@ -44,17 +47,19 @@ class World:
                     f"Célula reservada fora do mundo: ({x}, {y})"
                 )
 
-        if food_count + obstacle_count + len(self.reserved_cells) > (
+        if food_count + obstacle_count + water_count + wood_count + stone_count + len(self.reserved_cells) > (
             width * height
         ):
             raise ValueError(
-                "Não há células suficientes para comida, "
-                "obstáculos e posições reservadas."
+                "Não há células suficientes para recursos, obstáculos "
+                "e posições reservadas."
             )
 
         self._place_food(food_count)
         self._place_obstacles(obstacle_count)
         self._place_water(water_count)
+        self._place_materials(MaterialKind.WOOD, wood_count)
+        self._place_materials(MaterialKind.STONE, stone_count)
 
     def _place_food(self, food_count: int) -> None:
         available_cells = [
@@ -83,6 +88,33 @@ class World:
             raise ValueError("Não há células suficientes para fontes de água.")
         for cell in self.rng.sample(available_cells, water_count):
             cell.resource = Water()
+
+    def _place_materials(self, kind: MaterialKind, count: int) -> None:
+        available_cells = [
+            cell for row in self.grid for cell in row
+            if cell.resource is None and cell.obstacle is None
+            and (cell.x, cell.y) not in self.reserved_cells
+        ]
+        if count > len(available_cells):
+            raise ValueError(f"Não há células suficientes para {kind.value}.")
+        for cell in self.rng.sample(available_cells, count):
+            # Cada depósito tem uma quantidade variável, para não tornar
+            # todos os pontos de coleta idênticos. A semente do mundo controla isso.
+            cell.resource = MaterialResource(kind=kind, quantity=self.rng.randint(2, 5))
+
+    def get_material_counts(self) -> dict[str, float]:
+        """Retorna unidades totais e número de depósitos por tipo de material."""
+        counts: dict[str, float] = {}
+        for kind in MaterialKind:
+            counts[f"{kind.value}_units"] = 0.0
+            counts[f"{kind.value}_nodes"] = 0.0
+        for row in self.grid:
+            for cell in row:
+                resource = cell.resource
+                if isinstance(resource, MaterialResource):
+                    counts[f"{resource.kind.value}_units"] += resource.quantity
+                    counts[f"{resource.kind.value}_nodes"] += 1
+        return counts
 
     def get_water_positions(self) -> list[tuple[int, int]]:
         return [
@@ -166,24 +198,43 @@ class World:
 
         return nearby_cells
 
-    def collect_resource(self, x: int, y: int):
+    def collect_resource(self, x: int, y: int, quantity: float | None = None):
         cell = self.get_cell(x, y)
         resource = cell.resource
 
         if resource is None or not resource.is_collectible:
             return None
 
+        if isinstance(resource, MaterialResource) and quantity is not None:
+            if not isfinite(quantity) or quantity < 0:
+                raise ValueError("A quantidade coletada deve ser finita e não negativa.")
+            if quantity == 0:
+                return None
+            collected_quantity = min(float(quantity), resource.quantity)
+            collected = MaterialResource(resource.kind, collected_quantity)
+            resource.quantity -= collected_quantity
+            if resource.quantity <= 1e-9:
+                cell.resource = None
+            return collected
+
         cell.resource = None
         return resource
 
-    def advance_resources(self) -> None:
-        """Avança o ciclo de vida dos recursos presentes no mundo."""
+    def advance_resources(self) -> dict[str, int]:
+        """Avança o ciclo de vida das plantas e retorna as transições ocorridas."""
+        transitions = {"seed_to_growing": 0, "growing_to_mature": 0}
         for row in self.grid:
             for cell in row:
                 resource = cell.resource
-
-                if isinstance(resource, Plant):
-                    resource.advance()
+                if not isinstance(resource, Plant):
+                    continue
+                previous_state = resource.state
+                resource.advance()
+                if previous_state == PlantState.SEED and resource.state == PlantState.GROWING:
+                    transitions["seed_to_growing"] += 1
+                elif previous_state == PlantState.GROWING and resource.state == PlantState.MATURE:
+                    transitions["growing_to_mature"] += 1
+        return transitions
 
     def get_plant_counts(self) -> dict[str, int]:
         """Retorna a quantidade de plantas em cada estágio."""
@@ -218,26 +269,38 @@ class World:
         max_plants: int = 100,
         occupied_cells: set[tuple[int, int]] | None = None,
     ) -> int:
-        """Gera sementes em células elegíveis.
+        """Gera sementes e retorna a quantidade efetivamente criada.
 
-        Retorna a quantidade de sementes efetivamente geradas.
+        Mantido como API simples por compatibilidade. Para auditoria detalhada,
+        use :meth:`spawn_seeds_with_report`.
         """
+        return self.spawn_seeds_with_report(
+            count=count,
+            max_plants=max_plants,
+            occupied_cells=occupied_cells,
+        )["spawned"]
+
+    def spawn_seeds_with_report(
+        self,
+        count: int = 1,
+        max_plants: int = 100,
+        occupied_cells: set[tuple[int, int]] | None = None,
+    ) -> dict[str, int]:
+        """Gera sementes e explica qualquer diferença entre pedido e criação."""
         if count < 0:
             raise ValueError("A quantidade de sementes não pode ser negativa.")
-
         if max_plants < 0:
             raise ValueError("max_plants não pode ser negativo.")
 
         occupied_cells = occupied_cells or set()
-
         existing_plants = sum(
             isinstance(cell.resource, Plant)
             for row in self.grid
             for cell in row
         )
-
-        available_capacity = max_plants - existing_plants
-        seeds_to_spawn = min(count, max(0, available_capacity))
+        available_capacity = max(0, max_plants - existing_plants)
+        allowed_by_cap = min(count, available_capacity)
+        blocked_by_plant_cap = count - allowed_by_cap
 
         available_cells = [
             cell
@@ -248,18 +311,19 @@ class World:
             and (cell.x, cell.y) not in self.reserved_cells
             and (cell.x, cell.y) not in occupied_cells
         ]
-
-        seeds_to_spawn = min(seeds_to_spawn, len(available_cells))
-
-        selected_cells = self.rng.sample(
-            available_cells,
-            seeds_to_spawn,
-        )
+        spawned_count = min(allowed_by_cap, len(available_cells))
+        blocked_by_space = allowed_by_cap - spawned_count
+        selected_cells = self.rng.sample(available_cells, spawned_count)
 
         for cell in selected_cells:
             cell.resource = Plant()
 
-        return len(selected_cells)
+        return {
+            "requested": count,
+            "spawned": spawned_count,
+            "blocked_by_plant_cap": blocked_by_plant_cap,
+            "blocked_by_space": blocked_by_space,
+        }
 
     def _has_line_of_sight(
         self,

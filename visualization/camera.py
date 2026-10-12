@@ -49,6 +49,15 @@ class Camera:
     def visible_height(self) -> float:
         return self.viewport_height_px / self.cell_size
 
+    def screen_to_world(self, screen_x: int, screen_y: int, grid_x: int, grid_y: int) -> tuple[int, int]:
+        """Converte coordenadas de tela em coordenadas de célula do mundo."""
+        world_x = int(self.x + (screen_x - grid_x) / self.cell_size)
+        world_y = int(self.y + (screen_y - grid_y) / self.cell_size)
+        return (
+            max(0, min(self.world_width - 1, world_x)),
+            max(0, min(self.world_height - 1, world_y)),
+        )
+
     def pan_pixels(self, dx: int, dy: int, cell_size: int | None = None) -> None:
         """Move a câmera conforme o arraste do mouse em pixels da tela."""
         size = self.cell_size if cell_size is None else cell_size

@@ -29,6 +29,8 @@ def main():
         food_count=config.food_count,
         obstacle_count=config.obstacle_count,
         water_count=config.water_count,
+        wood_count=config.wood_count,
+        stone_count=config.stone_count,
         reserved_cells=reserved_cells,
     )
 
@@ -62,6 +64,8 @@ def main():
     print(f"Área: {config.area} células")
     print(f"Plantas: {config.food_count}")
     print(f"Fontes de água: {config.water_count}")
+    print(f"Depósitos de madeira: {config.wood_count}")
+    print(f"Depósitos de pedra: {config.stone_count}")
     print(f"Obstáculos: {config.obstacle_count}")
     print(f"Posição inicial: {config.start_position}")
     print(f"Agentes humanos: {config.agent_count}")

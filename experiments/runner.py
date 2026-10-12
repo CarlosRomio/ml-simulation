@@ -8,6 +8,7 @@ from agents.factory import AgentFactory
 from animals.factory import HerbivoreFactory, CarnivoreFactory
 from configuration.simulation_config import SimulationConfig
 from environment.world import World
+from environment.resources import MaterialKind
 from metrics.tracker import SimulationMetrics
 from scenarios.scenario import Scenario
 from simulation.simulation import Simulation
@@ -25,7 +26,9 @@ class SimulationRunResult:
     blocked_movement_attempts: int = 0
     blocked_by_agent_attempts: int = 0
     blocked_by_environment_attempts: int = 0
-    population_history: list[dict[str, int]] = field(default_factory=list)
+    population_history: list[dict[str, int | float]] = field(default_factory=list)
+    ecology_history: list[dict[str, int | float]] = field(default_factory=list)
+    human_physiology_history: list[list[dict]] = field(default_factory=list)
     starvation_agents: int = 0
     living_herbivores: int = 0
     living_carnivores: int = 0
@@ -35,9 +38,17 @@ class SimulationRunResult:
     humans_killed_by_carnivores: int = 0
     human_defense_attacks: int = 0
     carnivores_killed: int = 0
+    herbivores_died_by_starvation: int = 0
+    herbivores_died_by_dehydration: int = 0
+    carnivores_died_by_starvation: int = 0
+    carnivores_died_by_dehydration: int = 0
 
 @dataclass
 class ExperimentSummary:
+    """Resumo agregado. starvation_runs é legado e significa extinção total da execução.
+
+    Para mortes individuais por fome, consulte average_deaths_by_starvation.
+    """
     total_runs: int
     survived_runs: int
     starvation_runs: int
@@ -59,6 +70,7 @@ class ExperimentSummary:
     average_agent_lifetime_steps: float
 
     runs_reached_plant_limit: int
+    extinction_runs: int = 0
     agent_survival_rate: float = 1.0
     average_surviving_agents: float = 1.0
     average_population_food_collected: float = 0.0
@@ -98,6 +110,8 @@ def run_single_simulation(
             food_count=config.food_count,
             obstacle_count=config.obstacle_count,
             water_count=config.water_count,
+            wood_count=config.wood_count,
+            stone_count=config.stone_count,
             reserved_cells={(start_x, start_y)},
             rng=rng,
         )
@@ -112,8 +126,11 @@ def run_single_simulation(
         vision_radius=config.vision_radius,
         preferred_position=(start_x, start_y),
         seed=run_seed + 2_000_000,
+        hunger_per_step=config.hunger_per_step,
         thirst_per_step=config.thirst_per_step,
+        starvation_threshold=config.starvation_threshold,
         dehydration_threshold=config.dehydration_threshold,
+        starvation_damage_per_step=config.starvation_damage_per_step,
         dehydration_damage_per_step=config.dehydration_damage_per_step,
     )
 
@@ -171,7 +188,43 @@ def run_single_simulation(
         blocked_by_agent_attempts=simulation.blocked_by_agent_attempts,
         blocked_by_environment_attempts=simulation.blocked_by_environment_attempts,
         population_history=list(simulation.population_history),
-        starvation_agents=sum(not agent.alive for agent in simulation.agents),
+        ecology_history=list(simulation.ecology_history),
+        human_physiology_history=[
+            [{
+                "step": 0,
+                "position_before": simulation.position_history_by_agent[id(agent)][0],
+                "position_after": simulation.position_history_by_agent[id(agent)][0],
+                "action": (0, 0), "moved": False, "distance": 0.0,
+                "health_before": simulation.metrics_by_agent[id(agent)].initial_health,
+                "health_after_physiology": simulation.metrics_by_agent[id(agent)].initial_health,
+                "health_after": simulation.metrics_by_agent[id(agent)].initial_health,
+                "energy_before": simulation.metrics_by_agent[id(agent)].initial_energy,
+                "energy_after_actions": simulation.metrics_by_agent[id(agent)].initial_energy,
+                "energy_after": simulation.metrics_by_agent[id(agent)].initial_energy,
+                "movement_energy_cost": 0.0, "food_energy_recovered": 0.0,
+                "rest_energy_recovered": 0.0, "energy_change_after_combat": 0.0,
+                "hunger_before": simulation.metrics_by_agent[id(agent)].initial_hunger,
+                "hunger_after_physiology": simulation.metrics_by_agent[id(agent)].initial_hunger,
+                "hunger_after": simulation.metrics_by_agent[id(agent)].initial_hunger,
+                "thirst_before": simulation.metrics_by_agent[id(agent)].initial_thirst,
+                "thirst_after_physiology": simulation.metrics_by_agent[id(agent)].initial_thirst,
+                "thirst_after": simulation.metrics_by_agent[id(agent)].initial_thirst,
+                "collected_food": False, "collected_resource_type": "NONE",
+                "inventory_weight": agent.inventory.current_weight,
+                "inventory_wood": agent.inventory.quantity_of(MaterialKind.WOOD),
+                "inventory_stone": agent.inventory.quantity_of(MaterialKind.STONE),
+                "inventory_fiber": agent.inventory.quantity_of(MaterialKind.FIBER),
+                "drank_water": False, "water_thirst_reduction": 0.0,
+                "damage_causes": [], "damage_by_cause": {},
+                "termination_cause": "RUNNING",
+            }] + list(simulation.diagnostic_history_by_agent[id(agent)])
+            for agent in simulation.agents
+        ],
+        starvation_agents=sum(
+            simulation.metrics_by_agent[id(agent)].termination_cause
+            in {"STARVATION", "STARVATION_AND_DEHYDRATION"}
+            for agent in simulation.agents
+        ),
         living_herbivores=len(simulation.alive_herbivores),
         living_carnivores=len(simulation.alive_carnivores),
         human_hunt_attacks=simulation.attacks,
@@ -180,6 +233,10 @@ def run_single_simulation(
         humans_killed_by_carnivores=simulation.humans_killed_by_carnivores,
         human_defense_attacks=simulation.human_defense_attacks,
         carnivores_killed=simulation.carnivores_killed,
+        herbivores_died_by_starvation=simulation.herbivores_died_by_starvation,
+        herbivores_died_by_dehydration=simulation.herbivores_died_by_dehydration,
+        carnivores_died_by_starvation=simulation.carnivores_died_by_starvation,
+        carnivores_died_by_dehydration=simulation.carnivores_died_by_dehydration,
     )
 
 class ExperimentRunner:
@@ -357,6 +414,7 @@ class ExperimentRunner:
             average_agent_lifetime_steps=average_agent("agent_lifetime_steps"),
             
             runs_reached_plant_limit=len(reached_limit),
+            extinction_runs=starvation,
             agent_survival_rate=(
                 sum(surviving_count(result) for result in self.results)
                 / sum((result.total_agents if result.all_agent_metrics else 1) for result in self.results)
@@ -372,17 +430,17 @@ class ExperimentRunner:
             minimum_food_per_agent=min(food_counts),
             maximum_food_per_agent=max(food_counts),
             food_collection_stddev=food_stddev,
-            average_starved_agents=sum(result.starvation_agents if result.all_agent_metrics else int(result.agent_metrics.termination_cause == "STARVATION") for result in self.results) / total,
+            average_starved_agents=sum(result.starvation_agents if result.all_agent_metrics else int(result.agent_metrics.termination_cause in {"STARVATION", "STARVATION_AND_DEHYDRATION"}) for result in self.results) / total,
             average_final_health=average_agent("final_health"),
             average_final_hunger=average_agent("final_hunger"),
             average_final_thirst=average_agent("final_thirst"),
             average_water_drinks=average_agent("water_drinks"),
             average_water_units_consumed=average_agent("water_units_consumed"),
             average_deaths_by_dehydration=sum(
-                m.termination_cause == "DEHYDRATION" for m in all_metrics
+                m.termination_cause in {"DEHYDRATION", "STARVATION_AND_DEHYDRATION"} for m in all_metrics
             ) / total,
             average_deaths_by_starvation=sum(
-                m.termination_cause == "STARVATION" for m in all_metrics
+                m.termination_cause in {"STARVATION", "STARVATION_AND_DEHYDRATION"} for m in all_metrics
             ) / total,
             average_blocked_movement_attempts=sum(result.blocked_movement_attempts for result in self.results) / total,
             average_blocked_by_agent_attempts=sum(result.blocked_by_agent_attempts for result in self.results) / total,
