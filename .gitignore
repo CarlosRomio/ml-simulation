@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Ferramentas e testes
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDEs e editores
+.vscode/
+.idea/
+
+# Configuração local e segredos
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Resultados gerados pelas simulações
+results/
+plots/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
