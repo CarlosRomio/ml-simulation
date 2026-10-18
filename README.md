@@ -53,7 +53,7 @@ A suíte cobre as necessidades, limites fisiológicos, causas de dano, consumo/r
 
 ## Recursos materiais e inventário
 
-O mundo agora pode conter depósitos coletáveis de madeira e pedra. Cada depósito tem uma quantidade variável, pode ser recolhido parcialmente e permanece na célula até acabar. Humanos têm inventário com capacidade limitada por peso: madeira pesa 1 unidade por item, pedra pesa 2 e fibra (reservada para extensões futuras) pesa 0,5. A coleta de material não é tratada como alimentação nem altera diretamente fome/energia. A política humana atual não procura materiais deliberadamente; ela os coleta ao passar por um depósito, permitindo validar a mecânica sem alterar a política de sobrevivência nesta etapa.
+O mundo agora pode conter depósitos coletáveis de madeira e pedra. Cada depósito tem uma quantidade variável, pode ser recolhido parcialmente e permanece na célula até acabar. Humanos têm inventário com capacidade limitada por peso: madeira pesa 1 unidade por item, pedra pesa 2 e fibra (reservada para extensões futuras) pesa 0,5. A coleta de material não é tratada como alimentação nem altera diretamente fome/energia. A política humana agora pode procurar madeira e pedra quando não há abrigo próximo, desde que fome e sede não estejam exigindo atenção prioritária. Com 5 madeiras e 2 pedras, procura um local livre afastado de outros abrigos e constrói autonomamente.
 
 Densidades configuráveis: `wood_density` e `stone_density` em `SimulationConfig`. O histórico `human_physiology_history.csv` registra o inventário por passo; `humans.csv` inclui o inventário final de cada indivíduo; `ecology_history.csv` registra o estoque no mundo e as unidades coletadas.
 
@@ -63,8 +63,59 @@ Consulte `docs/RESOURCE_INVENTORY.md` para as regras e os limites atuais.
 
 A barra lateral foi reorganizada em seções: mundo, vegetação, materiais, agente observado e interações. O conteúdo central é rolável pela roda do mouse quando não cabe na altura disponível; o cabeçalho e os controles permanecem fixos. A roda do mouse sobre o mapa continua controlando o zoom.
 
+A janela abre em tamanho compacto (1100 × 700) e pode ser redimensionada. A área do mapa acompanha o tamanho da janela; o zoom continua disponível pela roda do mouse. A janela mantém um mínimo de 800 × 480 para preservar a usabilidade do painel.
+
 A barra lateral mostra as quantidades do inventário do humano selecionado. Para selecionar outro humano, clique nele no mapa.
+
+#### Controle manual para validação
+
+- Clique em um humano para selecioná-lo.
+- Pressione **M** para alternar entre controle manual e IA autônoma.
+- Com o controle manual ativo, use **WASD** ou as **setas** para comandar um movimento por tecla pressionada. O movimento continua respeitando obstáculos, outros agentes e animais.
+- Pressione **M** novamente para devolver o humano à IA. Ao selecionar outro humano enquanto o controle manual está ativo, o controle acompanha a seleção.
+- **B** constrói um abrigo se o humano selecionado tiver materiais suficientes.
+- **Espaço** pausa/retoma; **1**, **2** e **3** alteram a velocidade; **Esc** fecha a janela.
 
 ### Correção de renderização da barra lateral
 
 A chamada de desenho das barras fisiológicas passa explicitamente a cor e a coordenada vertical ao renderizador. Foi adicionado um teste de regressão que desenha a barra lateral completa, incluindo estamina, fome e sede, para detectar incompatibilidades na assinatura de `_draw_bar`.
+
+
+## Abrigos compartilhados e inventário alimentar
+
+Os cenários de simulação e a interface principal colocam um abrigo compartilhado na posição inicial do mundo. O abrigo substitui o antigo depósito isolado: é uma estrutura de descanso, proteção e armazenamento, e não bloqueia movimento. Armazena alimento, madeira, pedra e fibra, com capacidade de 500 unidades de peso. Abrigos construídos autonomamente também têm armazenamento compartilhado.
+
+O inventário individual também carrega alimento (peso 1 por porção). Humanos coletam plantas maduras para o inventário e consomem uma porção quando a fome chega a 35. Ao permanecer sobre o depósito, depositam materiais e alimento excedente, preservando uma porção portátil; se estiverem com fome e sem alimento no inventário, retiram uma porção do estoque compartilhado. As transferências são registradas em `ecology_history.csv` e no histórico fisiológico individual.
+
+Ao passar por um abrigo, humanos depositam materiais e alimento excedente; se estiverem com fome e sem alimento no inventário, retiram uma porção do estoque. A busca por abrigo também pode ocorrer quando a energia fica baixa. A transferência de materiais acontece ao visitar o abrigo; a política ainda não planeja rotas exclusivamente para descarregar recursos.
+
+### Simulação visual: carnívoros e abrigos
+
+O `main.py` agora cria 3 carnívoros (vermelhos), além dos 8 herbívoros
+(verdes), utilizando as mesmas entidades e lógica do experimento.
+
+Pressione **B** para construir um abrigo na posição do humano observado.
+O custo é de **5 madeiras e 2 pedras** no inventário desse humano; a
+célula deve estar livre de recursos, obstáculos e outras estruturas.
+O abrigo persiste no mapa. Um humano dentro dele pode descansar quando sua energia está abaixo de 70, recuperando 8 unidades por passo em vez de 2 no repouso comum. Se fome (35) ou sede (40) ficarem altas, essas necessidades voltam a ter prioridade. O abrigo também reduz o dano de predação para 25% do dano normal (de 35 para 8,75 por ataque); não oferece invulnerabilidade nem recuperação de saúde.
+
+## Validação visual de abrigos e predadores
+
+- `M`: ativa/desativa o controle manual do humano selecionado.
+- `WASD` ou setas: move o humano sob controle manual.
+- `B`: constrói um abrigo na célula atual, se houver 5 madeiras e 2 pedras.
+- `F`: cria um carnívoro de teste em uma célula adjacente livre, focado no humano selecionado. Esse predador tem saúde ampliada e necessidades lentas para facilitar a validação; isso não altera os parâmetros dos carnívoros normais nem os experimentos.
+- `Espaço`: pausa/retoma a simulação.
+
+Enquanto o humano ocupa uma célula com abrigo, o dano de predação é reduzido a 25% do dano normal (de 35 para 8,75 por ataque). O abrigo não concede invulnerabilidade. Fora dele, o dano normal continua valendo. A barra fixa no topo da lateral mostra a saúde atual do humano selecionado e o último dano recebido; a seção “DANO / COMBATE”, no conteúdo rolável, mostra danos acumulados por causa e os três últimos ataques registrados.
+
+Para testar: selecione um humano, ative `M`, construa o abrigo com `B`, pressione `F` e retome a simulação com `Espaço` se ela estiver pausada. O carnívoro de teste persegue especificamente esse humano, evitando que herbívoros próximos desviem o teste.
+
+
+### Abrigos compartilhados e construção autônoma
+
+- O abrigo inicial também funciona como armazenamento compartilhado. Abrigos construídos pelos agentes têm a mesma capacidade de 500 unidades de peso.
+- Humanos cansados procuram abrigos livres quando energia cai abaixo de 50 e fome/sede não são urgentes; permanecem descansando até energia alcançar 70. Um abrigo ocupado por outro humano é temporariamente ignorado.
+- Quando não há abrigo a até 8 células de distância, agentes com fome abaixo de 25 e sede abaixo de 25 procuram madeira e pedra para construção.
+- O custo é 5 unidades de madeira e 2 de pedra. Ao reunir os materiais, o agente procura uma célula livre, sem recurso/obstáculo/estrutura, e constrói se o local estiver a mais de 8 células de outro abrigo.
+- O comportamento é baseado em regras explícitas, não em aprendizado de máquina. O controle manual desativa a construção autônoma para o humano controlado.

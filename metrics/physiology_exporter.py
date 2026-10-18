@@ -18,7 +18,11 @@ class PhysiologyExporter:
             "movement_energy_cost", "food_energy_recovered", "rest_energy_recovered",
             "energy_change_after_combat", "hunger_before", "hunger_after_physiology", "hunger_after",
             "thirst_before", "thirst_after_physiology", "thirst_after", "collected_food",
-            "moved", "distance", "action_dx", "action_dy", "damage_causes",
+            "moved", "distance", "action_dx", "action_dy", "inventory_weight",
+            "inventory_food", "inventory_wood", "inventory_stone", "inventory_fiber",
+            "food_consumed", "storage_food_deposited", "storage_food_withdrawn",
+            "storage_wood_deposited", "storage_stone_deposited", "storage_fiber_deposited",
+            "damage_causes",
             "damage_by_cause", "termination_cause",
         ]
         with path.open("w", newline="", encoding="utf-8-sig") as file:

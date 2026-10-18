@@ -57,3 +57,10 @@ py -3.13 run_ecosystem_experiment.py
 
 Enviar os cinco CSVs gerados em `results/ecosystem_experiment/` para a próxima auditoria:
 `runs.csv`, `humans.csv`, `population_history.csv`, `human_physiology_history.csv` e `ecology_history.csv`.
+
+## Utilidade inicial dos abrigos
+
+- Um humano que esteja sobre um abrigo e com energia abaixo de 70 pode permanecer ali para descansar, desde que fome esteja abaixo de 35 e sede abaixo de 40.
+- O repouso recupera até 8 unidades de energia por passo no abrigo; o repouso comum continua recuperando 2.
+- Fome e sede continuam tendo prioridade: o abrigo não impede o agente de procurar recursos quando essas necessidades ultrapassam os limites definidos.
+- Esta etapa não adiciona proteção contra ataques, recuperação de saúde, ocupação compartilhada ou construção automática.

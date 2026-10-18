@@ -19,7 +19,7 @@ class Scenario:
     def to_world(self):
         from environment.resources import Food, MaterialKind, MaterialResource, Plant, PlantState, Water
         from environment.world import World
-
+        
         world = World(
             width=self.width,
             height=self.height,
@@ -41,6 +41,10 @@ class Scenario:
             world.get_cell(x, y).resource = MaterialResource(
                 kind=MaterialKind(kind), quantity=quantity
             )
+
+        # Um depósito compartilhado começa no ponto de referência do cenário.
+        # A estrutura não bloqueia movimento nem ocupa a camada de recursos.
+        world.place_storage(*self.start_position)
 
         for x, y, obstacle_type in self.obstacle_positions:
             world.get_cell(x, y).obstacle = obstacle_type

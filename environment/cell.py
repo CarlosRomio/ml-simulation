@@ -10,6 +10,7 @@ class Cell:
     y: int
     resource: object | None = None
     obstacle: ObstacleType | None = None
+    structure: object | None = None
 
     @property
     def is_walkable(self) -> bool:

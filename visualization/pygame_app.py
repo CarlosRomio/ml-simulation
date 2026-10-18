@@ -33,21 +33,18 @@ def run(simulation: Simulation) -> None:
 
     view_width = min(VIEW_WIDTH, world.width)
     view_height = min(VIEW_HEIGHT, world.height)
-    cell_size = min(
-        MAX_CELL_SIZE,
-        MAX_GRID_SIZE // view_width,
-        MAX_GRID_SIZE // view_height,
-    )
-    cell_size = max(MIN_CELL_SIZE, cell_size)
-
-    grid_width = view_width * cell_size
-    grid_height = view_height * cell_size
+    # Janela inicial compacta, mas redimensionável. A área do mundo passa a
+    # acompanhar o tamanho da janela em vez de impor uma grade em pixels fixa.
+    window_width, window_height = 1100, 700
     grid_x = SIDEBAR_WIDTH + GRID_PADDING * 2
     grid_y = GRID_PADDING
-    window_width = grid_x + grid_width + GRID_PADDING
-    window_height = max(grid_height + GRID_PADDING * 2, 900)
+    grid_width = max(1, window_width - grid_x - GRID_PADDING)
+    grid_height = max(1, window_height - grid_y - GRID_PADDING)
+    cell_size = max(MIN_CELL_SIZE, min(30, MAX_CELL_SIZE,
+                                       MAX_GRID_SIZE // view_width,
+                                       MAX_GRID_SIZE // view_height))
 
-    screen = pygame.display.set_mode((window_width, window_height))
+    screen = pygame.display.set_mode((window_width, window_height), pygame.RESIZABLE)
     pygame.display.set_caption("ML Simulation - Survival")
     clock = pygame.time.Clock()
 
@@ -66,6 +63,7 @@ def run(simulation: Simulation) -> None:
     paused = False
     accumulated_time = 0.0
     simulation_speed = 1
+    build_message = ""
 
     while running:
         elapsed_ms = clock.tick(60)
@@ -73,6 +71,16 @@ def run(simulation: Simulation) -> None:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.VIDEORESIZE:
+                # Impõe um mínimo para manter painel e controles utilizáveis.
+                new_width = max(800, event.w)
+                new_height = max(480, event.h)
+                screen = pygame.display.set_mode((new_width, new_height), pygame.RESIZABLE)
+                window_width, window_height = screen.get_size()
+                grid_width = max(1, window_width - grid_x - GRID_PADDING)
+                grid_height = max(1, window_height - grid_y - GRID_PADDING)
+                grid_viewport = pygame.Rect(grid_x, grid_y, grid_width, grid_height)
+                camera.configure_viewport(grid_width, grid_height, camera.cell_size)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if grid_viewport.collidepoint(event.pos):
                     dragging_camera = True
@@ -84,6 +92,8 @@ def run(simulation: Simulation) -> None:
                     selected = next((item for item in simulation.agents if (item.x, item.y) == selected_position), None)
                     if selected is not None:
                         simulation.observed_agent = selected
+                        if simulation.manual_control_agent is not None:
+                            simulation.set_manual_control(selected, True)
                 dragging_camera = False
                 last_mouse_position = None
                 mouse_down_position = None
@@ -116,6 +126,35 @@ def run(simulation: Simulation) -> None:
                     running = False
                 elif event.key == pygame.K_SPACE and (bool(simulation.alive_agents) or bool(simulation.alive_herbivores) or bool(simulation.alive_carnivores)):
                     paused = not paused
+                elif event.key == pygame.K_b:
+                    built = simulation.build_shelter(simulation.observed_agent)
+                    build_message = ("Abrigo construido" if built else
+                                     "Abrigo: requer 5 madeiras, 2 pedras e celula livre")
+                elif event.key == pygame.K_f:
+                    test_carnivore = simulation.spawn_test_carnivore_near(
+                        simulation.observed_agent
+                    )
+                    build_message = (
+                        "Predador de teste criado ao lado do humano"
+                        if test_carnivore is not None
+                        else "Predador de teste: nenhuma celula adjacente livre"
+                    )
+                elif event.key == pygame.K_m:
+                    if simulation.manual_control_agent is simulation.observed_agent:
+                        simulation.set_manual_control(simulation.observed_agent, False)
+                        build_message = "Controle manual desativado; agente voltou a IA"
+                    elif simulation.set_manual_control(simulation.observed_agent, True):
+                        build_message = "Controle manual ativo: use WASD ou as setas"
+                    else:
+                        build_message = "Nao foi possivel controlar um agente morto"
+                elif event.key in (pygame.K_UP, pygame.K_w):
+                    simulation.queue_manual_action(0, -1)
+                elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    simulation.queue_manual_action(0, 1)
+                elif event.key in (pygame.K_LEFT, pygame.K_a):
+                    simulation.queue_manual_action(-1, 0)
+                elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                    simulation.queue_manual_action(1, 0)
                 elif event.key == pygame.K_1:
                     simulation_speed = 1
                 elif event.key == pygame.K_2:
@@ -133,6 +172,7 @@ def run(simulation: Simulation) -> None:
                     accumulated_time = 0.0
                     break
 
+        window_width, window_height = screen.get_size()
         screen.fill(BACKGROUND)
         agent = simulation.observed_agent
 
@@ -191,7 +231,7 @@ def run(simulation: Simulation) -> None:
                     grid_y=grid_y,
                     selected=current_agent is simulation.observed_agent,
                 )
-            for animal in simulation.herbivores:
+            for animal in (*simulation.herbivores, *simulation.carnivores):
                 if not (camera_x <= animal.x < camera_x + visible_world_width and
                         camera_y <= animal.y < camera_y + visible_world_height):
                     continue
@@ -199,6 +239,10 @@ def run(simulation: Simulation) -> None:
                                      cell_size=cell_size, grid_x=grid_x, grid_y=grid_y)
         finally:
             screen.set_clip(previous_clip)
+        if build_message:
+            font = pygame.font.SysFont("consolas", 16)
+            notice = font.render(build_message, True, (245, 236, 212))
+            screen.blit(notice, (grid_x + 8, window_height - 28))
         pygame.display.flip()
 
     pygame.quit()

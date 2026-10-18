@@ -7,7 +7,9 @@ from environment.cell import Cell
 from environment.world import World
 from agents.navigation.bfs import find_path
 from agents.needs import AgentNeeds
-from environment.resources import MaterialKind, MaterialResource, Water
+from environment.resources import MaterialKind, MaterialResource, Water, Plant, Food
+from environment.storage import Storage
+from environment.shelter import Shelter
 from agents.inventory import Inventory
 from agents.species import Species
 
@@ -55,6 +57,10 @@ class Agent:
 
         self.rng = rng if rng is not None else random
         self.inventory = inventory if inventory is not None else Inventory()
+        # Estado de intenção usado pela política autônoma e resolvido pela simulação.
+        self.building_intent = False
+        self.occupied_positions: set[Position] = set()
+        self.unavailable_shelter_positions: set[Position] = set()
 
     @property
     def max_energy(self) -> float:
@@ -111,11 +117,31 @@ class Agent:
             return False
         if isinstance(resource, MaterialResource):
             return self.inventory.max_collectible_units(resource.kind) >= 1
+        if isinstance(resource, Plant):
+            return self.inventory.max_food_units() >= 1
+        if isinstance(resource, Food):
+            return self.inventory.available_weight >= 1e-9
         return True
 
     def _clear_target(self) -> None:
         self.target = None
         self.path.clear()
+
+    @staticmethod
+    def _shelter_positions(world: World) -> list[Position]:
+        return [
+            (cell.x, cell.y)
+            for row in world.grid for cell in row
+            if isinstance(cell.structure, Shelter)
+        ]
+
+    def _has_nearby_shelter(
+        self, position: Position, world: World, radius: int = 8,
+        shelter_positions: list[Position] | None = None,
+    ) -> bool:
+        x, y = position
+        shelters = shelter_positions if shelter_positions is not None else self._shelter_positions(world)
+        return any(abs(sx - x) + abs(sy - y) <= radius for sx, sy in shelters)
 
     def _select_target(
         self,
@@ -124,6 +150,7 @@ class Agent:
         pathfinder: Pathfinder,
     ) -> None:
         current_position = (self.x, self.y)
+        self.building_intent = False
 
         if self.hunt_target is not None:
             path = pathfinder(world, current_position, self.hunt_target)
@@ -133,8 +160,99 @@ class Agent:
                 return
             self.hunt_target = None
 
-        # Necessidades competem por prioridade. Cada categoria é tentada em
-        # ordem; se todos os alvos estiverem inacessíveis, tenta-se a próxima.
+        shelter_positions = self._shelter_positions(world)
+        nearby_shelter = self._has_nearby_shelter(
+            current_position, world, shelter_positions=shelter_positions
+        )
+        wood = self.inventory.quantity_of(MaterialKind.WOOD)
+        stone = self.inventory.quantity_of(MaterialKind.STONE)
+        has_building_materials = wood >= 5 and stone >= 2
+
+        # Se já possui os materiais, procura um local livre afastado de outros
+        # abrigos. Isso evita estruturas sobre recursos, obstáculos ou agentes.
+        # O raio limitado mantém a escolha de destino barata por passo.
+        if has_building_materials and not nearby_shelter and self.hunger < 35.0 and self.thirst < 40.0:
+            build_sites: list[Position] = []
+            search_radius = 10
+            for y in range(max(0, self.y - search_radius), min(world.height, self.y + search_radius + 1)):
+                for x in range(max(0, self.x - search_radius), min(world.width, self.x + search_radius + 1)):
+                    position = (x, y)
+                    if abs(x - self.x) + abs(y - self.y) > search_radius:
+                        continue
+                    if position in self.occupied_positions:
+                        continue
+                    cell = world.get_cell(x, y)
+                    if cell.obstacle is not None or cell.resource is not None or cell.structure is not None:
+                        continue
+                    if self._has_nearby_shelter(
+                        position, world, shelter_positions=shelter_positions
+                    ):
+                        continue
+                    build_sites.append(position)
+            build_sites.sort(key=lambda pos: abs(pos[0] - self.x) + abs(pos[1] - self.y))
+            for candidate in build_sites:
+                path = pathfinder(world, current_position, candidate)
+                if path is None:
+                    continue
+                self.building_intent = True
+                self.target = candidate
+                self.path = path
+                return
+
+        # Se estiver cansado e sem necessidades urgentes, procura um abrigo
+        # compartilhado que não esteja ocupado por outro humano.
+        if self.energy < 50.0 and self.hunger < 35.0 and self.thirst < 40.0:
+            shelters = [
+                (cell.x, cell.y)
+                for row in world.grid for cell in row
+                if isinstance(cell.structure, Shelter)
+                and (cell.x, cell.y) not in self.unavailable_shelter_positions
+                and (cell.x, cell.y) != current_position
+            ]
+            shelters.sort(key=lambda pos: abs(pos[0] - self.x) + abs(pos[1] - self.y))
+            for candidate in shelters:
+                path = pathfinder(world, current_position, candidate)
+                if path is not None and len(path) > 1:
+                    self.target = candidate
+                    self.path = path
+                    return
+
+        # Se não existe abrigo próximo, coleta por iniciativa própria os
+        # materiais que faltam para construir. Necessidades fisiológicas mais
+        # urgentes continuam tendo prioridade.
+        should_gather_building_materials = (
+            not nearby_shelter and not has_building_materials
+            and self.hunger < 25.0 and self.thirst < 25.0
+            and self.energy > 15.0
+        )
+        if should_gather_building_materials:
+            needed_kinds = []
+            if wood < 5:
+                needed_kinds.append(MaterialKind.WOOD)
+            if stone < 2:
+                needed_kinds.append(MaterialKind.STONE)
+            # Prioriza madeira, que exige mais unidades, e passa para pedra
+            # assim que a quantidade de madeira necessária estiver completa.
+            needed_kinds.sort(key=lambda kind: 0 if kind == MaterialKind.WOOD and wood < 5 else 1)
+            for kind in needed_kinds:
+                candidates = [
+                    (cell.x, cell.y)
+                    for row in world.grid for cell in row
+                    if isinstance(cell.resource, MaterialResource)
+                    and cell.resource.kind == kind
+                    and self.can_collect_resource(cell.resource)
+                    and (cell.x, cell.y) != current_position
+                ]
+                candidates.sort(key=lambda pos: abs(pos[0] - self.x) + abs(pos[1] - self.y))
+                for candidate in candidates:
+                    path = pathfinder(world, current_position, candidate)
+                    if path is not None and len(path) > 1:
+                        self.target = candidate
+                        self.path = path
+                        return
+
+        # Necessidades competem por prioridade: água crítica, comida e água
+        # preventiva. A coleta de materiais entra depois dessas necessidades.
         target_groups: list[list[Position]] = []
         if self.thirst >= 40.0:
             target_groups.append(world.get_water_positions())
@@ -174,13 +292,50 @@ class Agent:
     ) -> Position:
         self._record_position()
         current_position = (self.x, self.y)
-        if self.thirst >= 1.0 and isinstance(world.get_cell(*current_position).resource, Water):
+        current_cell = world.get_cell(*current_position)
+        # Um abrigo passa a ter utilidade prática: um humano cansado pode
+        # interromper a exploração para recuperar estamina, desde que fome e
+        # sede não exijam atenção prioritária.
+        if (
+            isinstance(current_cell.structure, Shelter)
+            and self.energy < 70.0
+            and self.hunger < 35.0
+            and self.thirst < 40.0
+        ):
+            self._clear_target()
             return (0, 0)
 
-        current_resource = world.get_cell(*current_position).resource
-        if isinstance(current_resource, MaterialResource) and self.can_collect_resource(current_resource):
-            # Permanece no depósito para recolher material em lotes de uma unidade.
+        if self.thirst >= 1.0 and isinstance(current_cell.resource, Water):
             return (0, 0)
+
+        current_resource = current_cell.resource
+        if isinstance(current_resource, MaterialResource) and self.can_collect_resource(current_resource):
+            # Continua coletando enquanto precisa dos materiais; quando já pode
+            # construir longe de outro abrigo, deixa o depósito para o local de obra.
+            wood = self.inventory.quantity_of(MaterialKind.WOOD)
+            stone = self.inventory.quantity_of(MaterialKind.STONE)
+            has_building_materials = wood >= 5 and stone >= 2
+            material_still_needed = (
+                (current_resource.kind == MaterialKind.WOOD and wood < 5)
+                or (current_resource.kind == MaterialKind.STONE and stone < 2)
+            )
+            if material_still_needed:
+                return (0, 0)
+            if self._has_nearby_shelter(current_position, world):
+                # Próximo de um abrigo, coleta de materiais é oportunista.
+                return (0, 0)
+            # Longe de abrigos, deixa o recurso excedente para procurar o tipo
+            # que falta ou deslocar-se para o local de construção.
+        if isinstance(current_cell.structure, Storage):
+            storage = current_cell.structure
+            has_materials = any(self.inventory.quantity_of(kind) > 0 for kind in MaterialKind)
+            has_surplus_food = self.inventory.food_quantity > 1.0 + 1e-9
+            needs_food_from_storage = (
+                self.hunger >= 35.0 and self.inventory.food_quantity < 1.0
+                and storage.food_quantity > 0 and self.inventory.available_weight > 0
+            )
+            if has_materials or has_surplus_food or needs_food_from_storage:
+                return (0, 0)
 
         # O agente chegou ao destino.
         if self.target == current_position:
@@ -199,6 +354,9 @@ class Agent:
                 world,
                 pathfinder,
             )
+
+        if self.building_intent and self.target == current_position:
+            return (0, 0)
 
         # Descarta a posição atual do início da rota.
         if self.path and self.path[0] == current_position:

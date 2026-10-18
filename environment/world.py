@@ -6,7 +6,9 @@ from random import Random
 
 from environment.cell import Cell
 from environment.obstacles import ObstacleType
-from environment.resources import MaterialKind, MaterialResource, Plant, PlantState, Water
+from environment.resources import MaterialKind, MaterialResource, Plant, PlantState, Water, Food
+from environment.storage import Storage
+from environment.shelter import Shelter
 
 
 class World:
@@ -101,6 +103,41 @@ class World:
             # Cada depósito tem uma quantidade variável, para não tornar
             # todos os pontos de coleta idênticos. A semente do mundo controla isso.
             cell.resource = MaterialResource(kind=kind, quantity=self.rng.randint(2, 5))
+
+    def place_storage(self, x: int, y: int, storage: Storage | None = None) -> Storage:
+        """Coloca um abrigo com armazenamento compartilhado em célula caminhável."""
+        cell = self.get_cell(x, y)
+        if cell.obstacle is not None:
+            raise ValueError("Não é possível colocar um depósito sobre um obstáculo.")
+        if cell.structure is not None:
+            raise ValueError("Já existe uma estrutura nesta célula.")
+        # O ponto de armazenamento padrão agora é um abrigo completo.
+        # Estruturas Storage explicitamente fornecidas continuam aceitas para
+        # compatibilidade com cenários e testes especializados.
+        cell.structure = storage if storage is not None else Shelter()
+        return cell.structure
+
+    def get_storage_positions(self) -> list[tuple[int, int]]:
+        return [
+            (cell.x, cell.y)
+            for row in self.grid for cell in row
+            if isinstance(cell.structure, Storage)
+        ]
+
+    def get_storage_counts(self) -> dict[str, float]:
+        storages = [
+            cell.structure for row in self.grid for cell in row
+            if isinstance(cell.structure, Storage)
+        ]
+        return {
+            "storage_count": float(len(storages)),
+            "storage_food_units": sum(item.food_quantity for item in storages),
+            "storage_wood_units": sum(item.quantity_of(MaterialKind.WOOD) for item in storages),
+            "storage_stone_units": sum(item.quantity_of(MaterialKind.STONE) for item in storages),
+            "storage_fiber_units": sum(item.quantity_of(MaterialKind.FIBER) for item in storages),
+            "storage_weight": sum(item.current_weight for item in storages),
+            "storage_capacity_weight": sum(item.capacity_weight for item in storages),
+        }
 
     def get_material_counts(self) -> dict[str, float]:
         """Retorna unidades totais e número de depósitos por tipo de material."""
@@ -212,6 +249,18 @@ class World:
                 return None
             collected_quantity = min(float(quantity), resource.quantity)
             collected = MaterialResource(resource.kind, collected_quantity)
+            resource.quantity -= collected_quantity
+            if resource.quantity <= 1e-9:
+                cell.resource = None
+            return collected
+
+        if isinstance(resource, Food) and quantity is not None:
+            if not isfinite(quantity) or quantity < 0:
+                raise ValueError("A quantidade coletada deve ser finita e não negativa.")
+            if quantity == 0:
+                return None
+            collected_quantity = min(float(quantity), resource.quantity)
+            collected = Food(collected_quantity)
             resource.quantity -= collected_quantity
             if resource.quantity <= 1e-9:
                 cell.resource = None

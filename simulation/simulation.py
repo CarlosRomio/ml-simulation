@@ -3,6 +3,7 @@ import random
 from random import Random
 
 from agents.agent import Agent
+from agents.needs import AgentNeeds
 from agents.species import Species
 from animals.herbivore import Herbivore
 from animals.carnivore import Carnivore
@@ -10,6 +11,8 @@ from agents.navigation.bfs import find_path
 from agents.perception import Perception
 from environment.world import World
 from environment.resources import MaterialKind, MaterialResource, Water, Plant, PlantState, Food
+from environment.storage import Storage
+from environment.shelter import Shelter
 from metrics.tracker import SimulationMetrics
 
 
@@ -19,11 +22,75 @@ RUN_STAMINA_COST = 4.0
 ATTACK_STAMINA_COST = 8.0
 ATTACK_DAMAGE = 30.0
 CARNIVORE_ATTACK_DAMAGE = 35.0
+SHELTER_PREDATION_DAMAGE_MULTIPLIER = 0.25
 MEAT_HUNGER_REDUCTION = 70.0
 MEAT_STAMINA_REWARD = 25.0
 
 
 class Simulation:
+    def build_shelter(self, agent: Agent) -> bool:
+        """Constrói na posição atual por 5 madeiras e 2 pedras.
+
+        Não consome materiais se a construção não puder ser realizada.
+        """
+        if agent not in self.agents or not agent.alive:
+            return False
+        cell = self.world.get_cell(agent.x, agent.y)
+        if cell.structure is not None or cell.obstacle is not None or cell.resource is not None:
+            return False
+        if agent.inventory.quantity_of(MaterialKind.WOOD) < 5:
+            return False
+        if agent.inventory.quantity_of(MaterialKind.STONE) < 2:
+            return False
+        agent.inventory.remove(MaterialKind.WOOD, 5)
+        agent.inventory.remove(MaterialKind.STONE, 2)
+        cell.structure = Shelter(builder_id=id(agent))
+        self.shelters_built += 1
+        return True
+
+    def spawn_test_carnivore_near(self, agent: Agent) -> Carnivore | None:
+        """Cria um predador de teste ao lado do humano selecionado.
+
+        O indivíduo tem saúde ampliada e necessidades lentas para permitir
+        validar interações na janela sem alterar os parâmetros da população
+        normal nem os experimentos ecológicos.
+        """
+        if agent not in self.agents or not agent.alive:
+            return None
+        occupied = (
+            {(item.x, item.y) for item in self.agents}
+            | {(item.x, item.y) for item in self.herbivores}
+            | {(item.x, item.y) for item in self.carnivores}
+        )
+        candidates = [
+            (agent.x, agent.y - 1),
+            (agent.x + 1, agent.y),
+            (agent.x, agent.y + 1),
+            (agent.x - 1, agent.y),
+        ]
+        for x, y in candidates:
+            if (x, y) in occupied or not self.world.is_walkable(x, y):
+                continue
+            cell = self.world.get_cell(x, y)
+            if cell.resource is not None or cell.structure is not None:
+                continue
+            carnivore = Carnivore(
+                x, y,
+                needs=AgentNeeds(
+                    max_health=300.0, health=300.0,
+                    max_energy=80.0, energy=80.0,
+                    hunger=60.0, thirst=10.0,
+                    hunger_per_step=0.05, thirst_per_step=0.05,
+                ),
+                rng=Random(self.rng.randrange(0, 2**31)),
+            )
+            # O predador de teste foca o humano selecionado para tornar a
+            # validação reproduzível mesmo quando há herbívoros por perto.
+            carnivore.test_target_agent = agent
+            self.carnivores.append(carnivore)
+            return carnivore
+        return None
+
     def __init__(
         self,
         world: World,
@@ -74,8 +141,15 @@ class Simulation:
             if not world.is_walkable(animal.x, animal.y):
                 raise ValueError(f"Posição inicial inválida para carnívoro: ({animal.x}, {animal.y}).")
         self.attacks = 0
+        self.shelters_built = sum(
+            1 for row in world.grid for cell in row
+            if isinstance(cell.structure, Shelter)
+        )
         self.animals_killed = 0
         self.carnivore_attacks = 0
+        # Eventos recentes para inspeção visual durante testes interativos.
+        # Cada evento identifica o alvo, o dano efetivo e se havia abrigo.
+        self.damage_events: list[dict] = []
         self.human_defense_attacks = 0
         self.carnivores_killed = 0
         self.humans_killed_by_carnivores = 0
@@ -87,6 +161,9 @@ class Simulation:
         self.agent = self.agents[0]
         # Agente explicitamente observado pela interface; não é uma média populacional.
         self.observed_agent = self.agent
+        # Controle manual opcional para validação interativa na visualização.
+        self.manual_control_agent: Agent | None = None
+        self.manual_action: tuple[int, int] = (0, 0)
         self.steps = 0
         self.step_duration_seconds = step_duration_seconds
         self.seed_spawn_count = seed_spawn_count
@@ -151,6 +228,30 @@ class Simulation:
         self._record_resource_metrics(seeds_spawned=0)
         self._record_population_metrics()
 
+    def set_manual_control(self, agent: Agent, enabled: bool = True) -> bool:
+        """Ativa/desativa o controle manual de um humano da simulação."""
+        if agent not in self.agents or not agent.alive:
+            return False
+        if enabled:
+            self.manual_control_agent = agent
+            self.manual_action = (0, 0)
+            agent.target = None
+            agent.path.clear()
+            agent.building_intent = False
+        elif self.manual_control_agent is agent:
+            self.manual_control_agent = None
+            self.manual_action = (0, 0)
+        return True
+
+    def queue_manual_action(self, dx: int, dy: int) -> bool:
+        """Agenda um movimento cardinal para o próximo passo da simulação."""
+        if self.manual_control_agent is None or not self.manual_control_agent.alive:
+            return False
+        if (dx, dy) not in {(0, 0), (0, -1), (0, 1), (-1, 0), (1, 0)}:
+            raise ValueError("O movimento manual deve ser uma direção cardinal.")
+        self.manual_action = (dx, dy)
+        return True
+
     @property
     def alive_agents(self) -> list[Agent]:
         return [agent for agent in self.agents if agent.alive]
@@ -175,6 +276,16 @@ class Simulation:
             "plants_collected_by_humans": 0,
             "plants_collected_by_herbivores": 0,
             "food_items_collected_by_humans": 0,
+            "food_units_collected_by_humans": 0.0,
+            "food_units_consumed_by_humans": 0.0,
+            "food_units_deposited_by_humans": 0.0,
+            "food_units_withdrawn_by_humans": 0.0,
+            "wood_units_deposited_by_humans": 0.0,
+            "stone_units_deposited_by_humans": 0.0,
+            "fiber_units_deposited_by_humans": 0.0,
+            "wood_units_withdrawn_by_humans": 0.0,
+            "stone_units_withdrawn_by_humans": 0.0,
+            "fiber_units_withdrawn_by_humans": 0.0,
             "wood_units_collected_by_humans": 0.0,
             "stone_units_collected_by_humans": 0.0,
             "fiber_units_collected_by_humans": 0.0,
@@ -197,10 +308,51 @@ class Simulation:
         ecology_row = {
             **snapshot,
             **self.world.get_material_counts(),
+            **self.world.get_storage_counts(),
             "water_sources": len(self.world.get_water_positions()),
             **self._current_resource_events,
         }
         self.ecology_history.append(ecology_row)
+
+    def _interact_with_storage(self, agent: Agent) -> dict[str, float]:
+        """Realiza transferências automáticas quando o agente está no depósito.
+
+        Materiais são depositados. O alimento excedente é compartilhado,
+        preservando uma porção portátil; quando a fome exige alimento e o
+        inventário está vazio, uma porção é retirada do estoque comum.
+        """
+        cell = self.world.get_cell(agent.x, agent.y)
+        storage = cell.structure
+        transferred = {"food_deposited": 0.0, "food_withdrawn": 0.0,
+                       "wood_deposited": 0.0, "stone_deposited": 0.0,
+                       "fiber_deposited": 0.0, "wood_withdrawn": 0.0,
+                       "stone_withdrawn": 0.0, "fiber_withdrawn": 0.0}
+        if not isinstance(storage, Storage):
+            return transferred
+
+        for kind in MaterialKind:
+            carried = agent.inventory.quantity_of(kind)
+            if carried <= 0:
+                continue
+            accepted = storage.deposit(kind, carried)
+            removed = agent.inventory.remove(kind, accepted)
+            key = f"{kind.value}_deposited"
+            transferred[key] += removed
+            self._current_resource_events[f"{kind.value}_units_deposited_by_humans"] += removed
+
+        if agent.hunger >= 35.0 and agent.inventory.food_quantity < 1.0:
+            requested = min(1.0, storage.food_quantity, agent.inventory.available_weight)
+            accepted = agent.inventory.add_food(requested)
+            removed = storage.withdraw_food(accepted)
+            transferred["food_withdrawn"] += removed
+            self._current_resource_events["food_units_withdrawn_by_humans"] += removed
+        elif agent.hunger < 35.0 and agent.inventory.food_quantity > 1.0:
+            surplus = agent.inventory.food_quantity - 1.0
+            accepted = storage.deposit_food(surplus)
+            removed = agent.inventory.remove_food(accepted)
+            transferred["food_deposited"] += removed
+            self._current_resource_events["food_units_deposited_by_humans"] += removed
+        return transferred
 
     def _record_collection_event(self, resource, collector: str) -> None:
         if isinstance(resource, Plant):
@@ -210,8 +362,11 @@ class Simulation:
                 else "plants_collected_by_herbivores"
             )
             self._current_resource_events[key] += 1
+            if collector == "human":
+                self._current_resource_events["food_units_collected_by_humans"] += 1.0
         elif isinstance(resource, Food) and collector == "human":
             self._current_resource_events["food_items_collected_by_humans"] += 1
+            self._current_resource_events["food_units_collected_by_humans"] += resource.quantity
         elif isinstance(resource, MaterialResource) and collector == "human":
             key = f"{resource.kind.value}_units_collected_by_humans"
             self._current_resource_events[key] += resource.quantity
@@ -355,6 +510,41 @@ class Simulation:
 
         return moved_by_id
 
+    def _has_nearby_shelter(self, position: tuple[int, int], radius: int = 8) -> bool:
+        x, y = position
+        return any(
+            isinstance(cell.structure, Shelter)
+            and abs(cell.x - x) + abs(cell.y - y) <= radius
+            for row in self.world.grid for cell in row
+        )
+
+    def _try_autonomous_shelter_build(self, agent: Agent) -> bool:
+        """Constrói quando a política do agente definiu intenção de construção."""
+        if (
+            agent is self.manual_control_agent
+            or not agent.alive
+            or not getattr(agent, "building_intent", False)
+            or agent.inventory.quantity_of(MaterialKind.WOOD) < 5
+            or agent.inventory.quantity_of(MaterialKind.STONE) < 2
+        ):
+            return False
+        cell = self.world.get_cell(agent.x, agent.y)
+        if (
+            cell.structure is not None or cell.obstacle is not None
+            or cell.resource is not None
+            or self._has_nearby_shelter((agent.x, agent.y), radius=8)
+        ):
+            agent.building_intent = False
+            return False
+        agent.inventory.remove(MaterialKind.WOOD, 5)
+        agent.inventory.remove(MaterialKind.STONE, 2)
+        cell.structure = Shelter(builder_id=id(agent))
+        self.shelters_built += 1
+        agent.building_intent = False
+        agent.target = None
+        agent.path.clear()
+        return True
+
     def step(self) -> None:
         self._current_resource_events = self._empty_resource_events()
         alive_at_start = self.alive_agents
@@ -372,7 +562,12 @@ class Simulation:
         actions: dict[int, tuple[int, int]] = {}
 
         # All agents choose actions from the same pre-movement world state.
+        # O humano sob controle manual ignora a decisão autônoma neste passo,
+        # mas continua sujeito a colisões, necessidades e interações normais.
         for agent in alive_at_start:
+            if agent is self.manual_control_agent:
+                actions[id(agent)] = self.manual_action
+                continue
             nearby = self.perception.observe(
                 self.world, agent.x, agent.y, radius=agent.vision_radius
             )
@@ -405,8 +600,21 @@ class Simulation:
             else:
                 agent.hunt_target = None
                 agent.running = False
+            agent.occupied_positions = (
+                {(other.x, other.y) for other in alive_at_start if other is not agent}
+                | {(animal.x, animal.y) for animal in self.alive_herbivores}
+                | {(animal.x, animal.y) for animal in self.alive_carnivores}
+            )
+            agent.unavailable_shelter_positions = {
+                (other.x, other.y) for other in alive_at_start
+                if other is not agent
+                and isinstance(self.world.get_cell(other.x, other.y).structure, Shelter)
+            }
             actions[id(agent)] = agent.choose_action(nearby, self.world)
 
+        # Cada tecla corresponde a um único passo, evitando movimento contínuo
+        # involuntário quando a simulação está em velocidade acelerada.
+        self.manual_action = (0, 0)
         moved_by_id = self._resolve_movements(actions)
 
         sampled_states: dict[int, tuple[float, float, float, float]] = {}
@@ -447,27 +655,52 @@ class Simulation:
             if isinstance(current_resource, MaterialResource):
                 capacity_units = agent.inventory.max_collectible_units(current_resource.kind)
                 collection_quantity = min(1, capacity_units) if capacity_units > 0 else 0
+            elif isinstance(current_resource, Food):
+                collection_quantity = agent.inventory.available_weight
+            elif isinstance(current_resource, Plant) and agent.inventory.max_food_units() < 1:
+                collection_quantity = 0
+
+            can_collect = not isinstance(current_resource, (MaterialResource, Food, Plant)) or collection_quantity is None or collection_quantity > 0
             resource = (
                 self.world.collect_resource(agent.x, agent.y, quantity=collection_quantity)
-                if not isinstance(current_resource, MaterialResource) or collection_quantity > 0
-                else None
+                if can_collect else None
             )
             if resource is not None:
                 if isinstance(resource, Plant):
                     collected_resource_type = "PLANT"
+                    accepted_food = agent.inventory.add_food(1.0)
+                    if accepted_food < 1.0 - 1e-9:
+                        raise RuntimeError("A planta foi removida sem caber integralmente no inventário.")
                 elif isinstance(resource, Food):
                     collected_resource_type = "FOOD"
+                    accepted_food = agent.inventory.add_food(resource.quantity)
+                    if accepted_food < resource.quantity - 1e-9:
+                        raise RuntimeError("O alimento foi coletado além da capacidade do inventário.")
                 elif isinstance(resource, MaterialResource):
                     collected_resource_type = resource.kind.value.upper()
                     agent.inventory.add_resource(resource)
                 self._record_collection_event(resource, "human")
+
             collected_food = isinstance(resource, (Plant, Food))
             if collected_food:
+                metrics.food_collected += 1
+                self.food_collection_steps_by_agent[key].append(self.steps + 1)
+                self._steps_without_food_by_agent[key] = 0
+
+            self._try_autonomous_shelter_build(agent)
+            storage_transfers = self._interact_with_storage(agent)
+            consumed_food = 0.0
+            food_energy_recovered = 0.0
+            if agent.hunger >= 35.0 and agent.inventory.food_quantity >= 1.0:
+                agent.inventory.remove_food(1.0)
                 energy_before_food = agent.energy
                 agent.eat(FOOD_ENERGY)
                 food_energy_recovered = agent.energy - energy_before_food
-                metrics.food_collected += 1
-                self.food_collection_steps_by_agent[key].append(self.steps + 1)
+                consumed_food = 1.0
+                metrics.food_consumed += 1
+                self._current_resource_events["food_units_consumed_by_humans"] += 1.0
+
+            if collected_food or consumed_food > 0:
                 self._steps_without_food_by_agent[key] = 0
             else:
                 self._steps_without_food_by_agent[key] += 1
@@ -486,7 +719,9 @@ class Simulation:
                 movement_energy_cost = energy_before_cost - agent.energy
             else:
                 energy_before_rest = agent.energy
-                agent.rest(2.0)
+                current_structure = self.world.get_cell(agent.x, agent.y).structure
+                rest_amount = 8.0 if isinstance(current_structure, Shelter) else 2.0
+                agent.rest(rest_amount)
                 rest_energy_recovered = agent.energy - energy_before_rest
             health_before_needs = agent.health
             agent.needs.advance_step()
@@ -535,6 +770,13 @@ class Simulation:
                 "collected_food": collected_food,
                 "collected_resource_type": collected_resource_type,
                 "inventory_weight": agent.inventory.current_weight,
+                "inventory_food": agent.inventory.food_quantity,
+                "food_consumed": consumed_food,
+                "storage_food_deposited": storage_transfers["food_deposited"],
+                "storage_food_withdrawn": storage_transfers["food_withdrawn"],
+                "storage_wood_deposited": storage_transfers["wood_deposited"],
+                "storage_stone_deposited": storage_transfers["stone_deposited"],
+                "storage_fiber_deposited": storage_transfers["fiber_deposited"],
                 "inventory_wood": agent.inventory.quantity_of(MaterialKind.WOOD),
                 "inventory_stone": agent.inventory.quantity_of(MaterialKind.STONE),
                 "inventory_fiber": agent.inventory.quantity_of(MaterialKind.FIBER),
@@ -617,9 +859,13 @@ class Simulation:
         # Carnívoros procuram presas vivas (humanos e herbívoros), sem ocupar
         # células de outras entidades. O combate é resolvido após o movimento.
         for carnivore in list(self.alive_carnivores):
-            human_positions = [(a.x, a.y) for a in self.alive_agents]
-            herbivore_positions = [(h.x, h.y) for h in self.alive_herbivores]
-            prey_positions = human_positions + herbivore_positions
+            test_target = getattr(carnivore, "test_target_agent", None)
+            if test_target is not None and test_target.alive:
+                prey_positions = [(test_target.x, test_target.y)]
+            else:
+                human_positions = [(a.x, a.y) for a in self.alive_agents]
+                herbivore_positions = [(h.x, h.y) for h in self.alive_herbivores]
+                prey_positions = human_positions + herbivore_positions
             action = carnivore.choose_action(self.world, prey_positions)
             destination = (carnivore.x + action[0], carnivore.y + action[1])
             occupied = (set(human_positions) | set(herbivore_positions)
@@ -664,8 +910,13 @@ class Simulation:
         for carnivore in self.alive_carnivores:
             if carnivore.hunger < 30.0:
                 continue
+            test_target = getattr(carnivore, "test_target_agent", None)
+            available_targets = (
+                [test_target] if test_target is not None and test_target.alive
+                else self.alive_agents + self.alive_herbivores
+            )
             adjacent_targets = [
-                target for target in (self.alive_agents + self.alive_herbivores)
+                target for target in available_targets
                 if id(target) not in attacked_this_step
                 and abs(target.x-carnivore.x) + abs(target.y-carnivore.y) <= 1
             ]
@@ -680,9 +931,32 @@ class Simulation:
             target = adjacent_targets[0] if adjacent_targets else None
             if target is None:
                 continue
-            target.needs.damage(CARNIVORE_ATTACK_DAMAGE, cause="PREDATION")
+            damage = CARNIVORE_ATTACK_DAMAGE
+            if isinstance(target, Agent) and isinstance(
+                self.world.get_cell(target.x, target.y).structure, Shelter
+            ):
+                # O abrigo reduz bastante o dano, mas não torna o ocupante invulnerável.
+                damage *= SHELTER_PREDATION_DAMAGE_MULTIPLIER
+            health_before_attack = target.health
+            actual_damage = target.needs.damage(damage, cause="PREDATION")
             attacked_this_step.add(id(target))
             self.carnivore_attacks += 1
+            if isinstance(target, Agent) and actual_damage > 0:
+                self.damage_events.append({
+                    "step": self.steps + 1,
+                    "target_id": id(target),
+                    "source": "Carnívoro de teste" if test_target is target else "Carnívoro",
+                    "cause": "PREDATION",
+                    "damage": actual_damage,
+                    "health_before": health_before_attack,
+                    "health_after": target.health,
+                    "sheltered": isinstance(
+                        self.world.get_cell(target.x, target.y).structure, Shelter
+                    ),
+                })
+                # Mantém a janela responsiva e o histórico limitado em memória.
+                if len(self.damage_events) > 100:
+                    del self.damage_events[:-100]
             if not target.needs.alive:
                 target.alive = False
                 if isinstance(target, Agent):

@@ -70,6 +70,7 @@ def _run_row(index: int, seed: int, result: SimulationRunResult) -> dict:
         "human_mean_hunger_over_time": _mean([m.average_hunger for m in metrics]),
         "human_mean_thirst_over_time": _mean([m.average_thirst for m in metrics]),
         "human_food_collected": sum(m.food_collected for m in metrics),
+        "human_food_consumed": sum(m.food_consumed for m in metrics),
         "human_water_drinks": sum(m.water_drinks for m in metrics),
         "human_water_thirst_reduction": sum(m.water_units_consumed for m in metrics),
         "human_distance_travelled": sum(m.distance_travelled for m in metrics),
@@ -90,6 +91,14 @@ def _run_row(index: int, seed: int, result: SimulationRunResult) -> dict:
         "wood_units_collected_by_humans": ecology_sum("wood_units_collected_by_humans"),
         "stone_units_collected_by_humans": ecology_sum("stone_units_collected_by_humans"),
         "fiber_units_collected_by_humans": ecology_sum("fiber_units_collected_by_humans"),
+        "food_units_deposited_by_humans": ecology_sum("food_units_deposited_by_humans"),
+        "food_units_withdrawn_by_humans": ecology_sum("food_units_withdrawn_by_humans"),
+        "wood_units_deposited_by_humans": ecology_sum("wood_units_deposited_by_humans"),
+        "stone_units_deposited_by_humans": ecology_sum("stone_units_deposited_by_humans"),
+        "fiber_units_deposited_by_humans": ecology_sum("fiber_units_deposited_by_humans"),
+        "storage_food_final": ecology[-1].get("storage_food_units", 0.0) if ecology else 0.0,
+        "storage_wood_final": ecology[-1].get("storage_wood_units", 0.0) if ecology else 0.0,
+        "storage_stone_final": ecology[-1].get("storage_stone_units", 0.0) if ecology else 0.0,
         "seeds_spawned": result.seeds_spawned,
         "plants_collected_by_humans": int(ecology_sum("plants_collected_by_humans")),
         "plants_collected_by_herbivores": int(ecology_sum("plants_collected_by_herbivores")),
@@ -175,6 +184,15 @@ def main() -> None:
 
     print("\n=== Auditoria ecológica (totais das 20 execuções) ===")
     print(f"Plantas coletadas por humanos: {int(ecology_total('plants_collected_by_humans'))}")
+    print(f"Alimento coletado / consumido: {ecology_total('food_units_collected_by_humans'):.0f} / {ecology_total('food_units_consumed_by_humans'):.0f}")
+    print(f"Alimento depositado / retirado: {ecology_total('food_units_deposited_by_humans'):.0f} / {ecology_total('food_units_withdrawn_by_humans'):.0f}")
+    print(f"Materiais depositados (madeira/pedra/fibra): {ecology_total('wood_units_deposited_by_humans'):.0f} / {ecology_total('stone_units_deposited_by_humans'):.0f} / {ecology_total('fiber_units_deposited_by_humans'):.0f}")
+    final_storage = [result.ecology_history[-1] for result in results if result.ecology_history]
+    if final_storage:
+        print("Estoque médio final nos depósitos (alimento/madeira/pedra): "
+              f"{mean(float(row.get('storage_food_units', 0)) for row in final_storage):.1f} / "
+              f"{mean(float(row.get('storage_wood_units', 0)) for row in final_storage):.1f} / "
+              f"{mean(float(row.get('storage_stone_units', 0)) for row in final_storage):.1f}")
     print(f"Unidades de madeira coletadas: {ecology_total('wood_units_collected_by_humans'):.0f}")
     print(f"Unidades de pedra coletadas: {ecology_total('stone_units_collected_by_humans'):.0f}")
     print(f"Plantas coletadas por herbívoros: {int(ecology_total('plants_collected_by_herbivores'))}")
@@ -218,6 +236,7 @@ def main() -> None:
             human_rows.append({"run": run_index, "seed": base_seed + run_index - 1,
                                "agent_index": agent_index, **metric_data,
                                "final_inventory_weight": final_inventory.get("inventory_weight", 0.0),
+                               "final_inventory_food": final_inventory.get("inventory_food", 0.0),
                                "final_inventory_wood": final_inventory.get("inventory_wood", 0.0),
                                "final_inventory_stone": final_inventory.get("inventory_stone", 0.0),
                                "final_inventory_fiber": final_inventory.get("inventory_fiber", 0.0),

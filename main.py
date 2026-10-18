@@ -1,6 +1,6 @@
 
 from agents.factory import AgentFactory
-from animals.factory import HerbivoreFactory
+from animals.factory import HerbivoreFactory, CarnivoreFactory
 from environment.world import World
 from simulation.simulation import Simulation
 from visualization.pygame_app import run
@@ -16,6 +16,7 @@ def main():
         vision_radius=6,
         agent_count=10,
         herbivore_count=8,
+        carnivore_count=3,
     )
 
     config.validate()
@@ -33,6 +34,8 @@ def main():
         stone_count=config.stone_count,
         reserved_cells=reserved_cells,
     )
+
+    world.place_storage(*config.start_position)
 
     agents = AgentFactory.create_agents(
         world=world,
@@ -53,10 +56,19 @@ def main():
         occupied_positions={(agent.x, agent.y) for agent in agents},
     )
 
+    carnivores = CarnivoreFactory.create(
+        world=world,
+        count=config.carnivore_count,
+        vision_radius=config.vision_radius,
+        seed=126,
+        occupied_positions={(item.x, item.y) for item in [*agents, *herbivores]},
+    )
+
     simulation = Simulation(
         world=world,
         agents=agents,
         herbivores=herbivores,
+        carnivores=carnivores,
     )
 
     print("=== Configuração da simulação ===")
@@ -68,8 +80,10 @@ def main():
     print(f"Depósitos de pedra: {config.stone_count}")
     print(f"Obstáculos: {config.obstacle_count}")
     print(f"Posição inicial: {config.start_position}")
+    print(f"Depósito compartilhado: {config.start_position} (capacidade 500 de peso)")
     print(f"Agentes humanos: {config.agent_count}")
     print(f"Herbívoros: {config.herbivore_count}")
+    print(f"Carnívoros: {config.carnivore_count}")
     print(f"Raio de visão: {config.vision_radius}")
 
     run(simulation)

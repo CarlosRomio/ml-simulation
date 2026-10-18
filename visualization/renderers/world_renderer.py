@@ -4,6 +4,8 @@ import pygame
 
 from environment.obstacles import ObstacleType
 from environment.resources import MaterialKind, MaterialResource, Plant, PlantState, Water
+from environment.storage import Storage
+from environment.shelter import Shelter
 from visualization.rendering_config import (
     CELL_COLOR,
     FOOD_COLOR,
@@ -103,6 +105,24 @@ class WorldRenderer:
                         pygame.draw.circle(
                             screen, FOOD_COLOR, rect.center, max(2, cell_size // 6)
                         )
+
+                    if isinstance(cell.structure, Shelter):
+                        roof = [(rect.left + cell_size // 8, rect.centery),
+                                (rect.centerx, rect.top + cell_size // 8),
+                                (rect.right - cell_size // 8, rect.centery)]
+                        pygame.draw.rect(screen, (159, 116, 74),
+                                         pygame.Rect(rect.left + cell_size // 5, rect.centery,
+                                                     max(2, cell_size * 3 // 5), max(2, cell_size // 3)))
+                        pygame.draw.polygon(screen, (110, 65, 43), roof)
+
+                    if isinstance(cell.structure, Storage) and not isinstance(cell.structure, Shelter):
+                        # Depósito desenhado sobre a célula, sem bloquear o recurso
+                        # ou a movimentação caso futuramente coexistam camadas.
+                        chest = rect.inflate(-max(4, cell_size // 5), -max(4, cell_size // 4))
+                        pygame.draw.rect(screen, (130, 88, 49), chest, border_radius=max(1, cell_size // 12))
+                        pygame.draw.rect(screen, (207, 166, 91), chest, width=max(1, cell_size // 16), border_radius=max(1, cell_size // 12))
+                        pygame.draw.line(screen, (232, 202, 137), (chest.left, chest.centery), (chest.right, chest.centery), max(1, cell_size // 12))
+                        pygame.draw.rect(screen, (62, 57, 46), pygame.Rect(chest.centerx - max(1, cell_size // 18), chest.centery - max(1, cell_size // 16), max(2, cell_size // 9), max(3, cell_size // 8)))
 
                     if (
                         visible_positions is not None

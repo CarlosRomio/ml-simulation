@@ -36,6 +36,7 @@ class SimulationMetrics:
     water_drinks: int = 0
     water_units_consumed: float = 0.0
     food_collected: int = 0
+    food_consumed: int = 0
     energy_sum: float = 0.0
     energy_samples: int = 0
 
@@ -77,6 +78,7 @@ class SimulationMetrics:
             f"Passos executados: {self.steps}\n"
             f"Tempo simulado: {self.simulated_time_seconds:.2f} s\n"
             f"Comida coletada: {self.food_collected}\n"
+            f"Comida consumida: {self.food_consumed}\n"
             f"Energia inicial: {self.initial_energy:.1f}\n"
             f"Energia final: {self.final_energy:.1f}\n"
             f"Vida final: {self.final_health:.1f}\n"

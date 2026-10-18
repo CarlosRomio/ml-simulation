@@ -1,4 +1,4 @@
-"""Inventário individual para transportar materiais coletados no mundo."""
+"""Inventário individual para transportar alimento e materiais coletados no mundo."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -13,10 +13,13 @@ class Inventory:
 
     capacity_weight: float = 20.0
     quantities: dict[MaterialKind, float] = field(default_factory=dict)
+    food_quantity: float = 0.0
 
     def __post_init__(self) -> None:
         if not isfinite(self.capacity_weight) or self.capacity_weight < 0:
             raise ValueError("A capacidade do inventário deve ser finita e não negativa.")
+        if not isfinite(self.food_quantity) or self.food_quantity < 0:
+            raise ValueError("A quantidade de alimento deve ser finita e não negativa.")
         normalized: dict[MaterialKind, float] = {}
         for kind, quantity in self.quantities.items():
             kind = MaterialKind(kind)
@@ -30,7 +33,7 @@ class Inventory:
 
     @property
     def current_weight(self) -> float:
-        return sum(quantity * kind.unit_weight for kind, quantity in self.quantities.items())
+        return self.food_quantity + sum(quantity * kind.unit_weight for kind, quantity in self.quantities.items())
 
     @property
     def available_weight(self) -> float:
@@ -53,6 +56,26 @@ class Inventory:
             self.quantities[kind] = self.quantity_of(kind) + accepted
         return accepted
 
+    def max_food_units(self) -> int:
+        """Quantidade inteira de alimento que cabe no inventário."""
+        return max(0, floor(self.available_weight + 1e-9))
+
+    def add_food(self, quantity: float) -> float:
+        if not isfinite(quantity) or quantity < 0:
+            raise ValueError("A quantidade de alimento deve ser finita e não negativa.")
+        accepted = min(float(quantity), self.available_weight)
+        self.food_quantity += accepted
+        return accepted
+
+    def remove_food(self, quantity: float) -> float:
+        if not isfinite(quantity) or quantity < 0:
+            raise ValueError("A quantidade de alimento deve ser finita e não negativa.")
+        removed = min(float(quantity), self.food_quantity)
+        self.food_quantity -= removed
+        if self.food_quantity < 1e-9:
+            self.food_quantity = 0.0
+        return removed
+
     def add_resource(self, resource: MaterialResource) -> float:
         return self.add(resource.kind, resource.quantity)
 
@@ -70,4 +93,4 @@ class Inventory:
         return removed
 
     def to_dict(self) -> dict[str, float]:
-        return {kind.value: self.quantity_of(kind) for kind in MaterialKind}
+        return {"food": self.food_quantity, **{kind.value: self.quantity_of(kind) for kind in MaterialKind}}

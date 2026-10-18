@@ -115,6 +115,7 @@ def run_single_simulation(
             reserved_cells={(start_x, start_y)},
             rng=rng,
         )
+        world.place_storage(start_x, start_y)
     else:
         world = scenario.to_world()
         world.rng = random.Random(run_seed + 1_000_000)
@@ -211,6 +212,10 @@ def run_single_simulation(
                 "thirst_after": simulation.metrics_by_agent[id(agent)].initial_thirst,
                 "collected_food": False, "collected_resource_type": "NONE",
                 "inventory_weight": agent.inventory.current_weight,
+                "inventory_food": agent.inventory.food_quantity,
+                "food_consumed": 0.0,
+                "storage_food_deposited": 0.0,
+                "storage_food_withdrawn": 0.0,
                 "inventory_wood": agent.inventory.quantity_of(MaterialKind.WOOD),
                 "inventory_stone": agent.inventory.quantity_of(MaterialKind.STONE),
                 "inventory_fiber": agent.inventory.quantity_of(MaterialKind.FIBER),
