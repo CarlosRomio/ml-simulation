@@ -81,6 +81,10 @@ class AgentFactory:
                 starvation_damage_per_step=needs_template.starvation_damage_per_step,
                 dehydration_damage_per_step=needs_template.dehydration_damage_per_step,
             )
+            # Personalidades reproduzíveis, geradas independentemente do RNG
+            # usado para posicionamento e decisões de movimento.
+            sociability_rng = random.Random(None if agent_seed is None else agent_seed + 91_827)
+            sociability = sociability_rng.uniform(0.15, 0.95)
             agents.append(
                 Agent(
                     x=x,
@@ -89,6 +93,8 @@ class AgentFactory:
                     rng=Random(agent_seed) if agent_seed is not None else None,
                     needs=needs,
                     species=species,
+                    sociability=sociability,
+                    agent_id=f"H{index + 1:03d}",
                 )
             )
         return agents

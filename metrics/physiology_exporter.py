@@ -13,7 +13,7 @@ class PhysiologyExporter:
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         fields = [
-            "agent_index", "step", "x", "y", "health_before", "health_after_physiology",
+            "agent_index", "agent_id", "step", "x", "y", "health_before", "health_after_physiology",
             "health_after", "energy_before", "energy_after_actions", "energy_after",
             "movement_energy_cost", "food_energy_recovered", "rest_energy_recovered",
             "energy_change_after_combat", "hunger_before", "hunger_after_physiology", "hunger_after",
@@ -33,7 +33,7 @@ class PhysiologyExporter:
                 metrics = simulation.metrics_by_agent[key]
                 initial_position = simulation.position_history_by_agent[key][0]
                 writer.writerow({
-                    "agent_index": index, "step": 0,
+                    "agent_index": index, "agent_id": agent.agent_id or f"H{index:03d}", "step": 0,
                     "x": initial_position[0], "y": initial_position[1],
                     "health_before": metrics.initial_health, "health_after_physiology": metrics.initial_health,
                     "health_after": metrics.initial_health, "energy_before": metrics.initial_energy,
@@ -52,6 +52,7 @@ class PhysiologyExporter:
                     writer.writerow({
                         **record,
                         "agent_index": index,
+                        "agent_id": agent.agent_id or f"H{index:03d}",
                         "x": after_pos[0], "y": after_pos[1],
                         "action_dx": action[0], "action_dy": action[1],
                         "damage_causes": ";".join(record.get("damage_causes", [])),

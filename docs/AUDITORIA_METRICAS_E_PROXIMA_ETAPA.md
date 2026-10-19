@@ -64,3 +64,10 @@ Enviar os cinco CSVs gerados em `results/ecosystem_experiment/` para a próxima 
 - O repouso recupera até 8 unidades de energia por passo no abrigo; o repouso comum continua recuperando 2.
 - Fome e sede continuam tendo prioridade: o abrigo não impede o agente de procurar recursos quando essas necessidades ultrapassam os limites definidos.
 - Esta etapa não adiciona proteção contra ataques, recuperação de saúde, ocupação compartilhada ou construção automática.
+
+
+## Auditoria de afinidades sociais
+
+Os humanos recebem IDs estáveis (`H001`, `H002`, ...) por execução. A simulação mantém afinidade persistente por par, registra a distância e as alterações da afinidade por passo, e gera um histórico social individual. A proximidade (distância Manhattan <= 3) incrementa afinidade de forma lenta, ponderada pela sociabilidade dos dois agentes; separação superior a seis células reduz a afinidade lentamente. A escolha social favorece indivíduos visíveis com maior afinidade, com distância como critério secundário.
+
+Os logs sociais são exportados por `run_ecosystem_experiment.py` para `social_history.csv`, `social_agents_history.csv` e `social_relationships_final.csv`. Esses dados permitem diferenciar encontros ocasionais de relações recorrentes; não são, por si só, evidência de cooperação.

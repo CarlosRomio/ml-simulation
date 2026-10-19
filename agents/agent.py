@@ -33,12 +33,16 @@ class Agent:
         needs: AgentNeeds | None = None,
         species: Species = Species.HUMAN,
         inventory: Inventory | None = None,
+        sociability: float = 0.5,
+        agent_id: str | None = None,
     ):
         if vision_radius < 0:
             raise ValueError("vision_radius não pode ser negativo")
 
         self.x = x
         self.y = y
+        # Identificador legível, atribuído pela simulação se não for fornecido.
+        self.agent_id = agent_id
         self.species = Species(species)
         self.hunt_target: Position | None = None
         self.running = False
@@ -57,6 +61,16 @@ class Agent:
 
         self.rng = rng if rng is not None else random
         self.inventory = inventory if inventory is not None else Inventory()
+        if not 0.0 <= sociability <= 1.0:
+            raise ValueError("A sociabilidade deve estar entre 0 e 1.")
+        # Traço estável por indivíduo; não muda a cada passo da simulação.
+        self.sociability = float(sociability)
+        # Posições de humanos vivos dentro do alcance social percebido neste passo.
+        self.social_neighbors: list[Position] = []
+        # Afinidades persistentes por identificador de indivíduo (0..1).
+        self.social_affinities: dict[str, float] = {}
+        # Afinidades dos humanos visíveis neste passo, indexadas por posição.
+        self.social_neighbor_affinities: dict[Position, float] = {}
         # Estado de intenção usado pela política autônoma e resolvido pela simulação.
         self.building_intent = False
         self.occupied_positions: set[Position] = set()
@@ -244,6 +258,63 @@ class Agent:
                     and (cell.x, cell.y) != current_position
                 ]
                 candidates.sort(key=lambda pos: abs(pos[0] - self.x) + abs(pos[1] - self.y))
+                for candidate in candidates:
+                    path = pathfinder(world, current_position, candidate)
+                    if path is not None and len(path) > 1:
+                        self.target = candidate
+                        self.path = path
+                        return
+
+        # Sociabilidade é uma preferência de baixa prioridade: só influencia a
+        # decisão quando o agente não está com fome/sede relevantes, não está
+        # construindo e tem energia para se deslocar. O alvo é uma célula livre
+        # próxima de outro humano, nunca a própria célula ocupada por ele.
+        if (
+            self.sociability >= 0.35
+            and self.hunger < 25.0
+            and self.thirst < 25.0
+            and self.energy > 25.0
+            and self.social_neighbors
+        ):
+            # Entre indivíduos visíveis, prefere aqueles com maior afinidade
+            # acumulada; em empate, favorece quem está mais próximo.
+            nearest_neighbor = max(
+                self.social_neighbors,
+                key=lambda pos: (
+                    self.social_neighbor_affinities.get(pos, 0.0),
+                    -(abs(pos[0] - self.x) + abs(pos[1] - self.y)),
+                    -pos[1], -pos[0],
+                ),
+            )
+            neighbor_distance = abs(nearest_neighbor[0] - self.x) + abs(nearest_neighbor[1] - self.y)
+            preferred_distance = 1 if self.sociability >= 0.75 else (2 if self.sociability >= 0.5 else 3)
+            # Se já está numa distância social razoável, não persegue outro
+            # indivíduo: pode continuar explorando e evita formar uma pilha.
+            # Estar perto de um desconhecido não substitui automaticamente
+            # uma relação preferida: a proximidade só satisfaz a intenção social
+            # quando o indivíduo selecionado como alvo já está perto.
+            already_socially_close = neighbor_distance <= preferred_distance
+            if not already_socially_close and neighbor_distance > preferred_distance:
+                candidates: list[Position] = []
+                for y in range(max(0, nearest_neighbor[1] - preferred_distance),
+                               min(world.height, nearest_neighbor[1] + preferred_distance + 1)):
+                    for x in range(max(0, nearest_neighbor[0] - preferred_distance),
+                                   min(world.width, nearest_neighbor[0] + preferred_distance + 1)):
+                        candidate = (x, y)
+                        if candidate == nearest_neighbor or candidate == current_position:
+                            continue
+                        if abs(x - nearest_neighbor[0]) + abs(y - nearest_neighbor[1]) != preferred_distance:
+                            continue
+                        if candidate in self.occupied_positions:
+                            continue
+                        cell = world.get_cell(x, y)
+                        if cell.obstacle is not None or cell.resource is not None or cell.structure is not None:
+                            continue
+                        candidates.append(candidate)
+                candidates.sort(key=lambda pos: (
+                    abs(pos[0] - self.x) + abs(pos[1] - self.y),
+                    pos[1], pos[0],
+                ))
                 for candidate in candidates:
                     path = pathfinder(world, current_position, candidate)
                     if path is not None and len(path) > 1:

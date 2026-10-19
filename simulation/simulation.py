@@ -127,6 +127,17 @@ class Simulation:
 
         self.world = world
         self.agents = selected_agents
+        # IDs determinísticos dentro da execução, usados pela interface e pelos
+        # CSVs. IDs customizados são preservados quando únicos.
+        used_agent_ids: set[str] = set()
+        next_agent_number = 1
+        for item in self.agents:
+            if not item.agent_id or item.agent_id in used_agent_ids:
+                while f"H{next_agent_number:03d}" in used_agent_ids:
+                    next_agent_number += 1
+                item.agent_id = f"H{next_agent_number:03d}"
+                next_agent_number += 1
+            used_agent_ids.add(item.agent_id)
         self.herbivores = list(herbivores or [])
         self.carnivores = list(carnivores or [])
         all_positions = ([(a.x, a.y) for a in self.agents]
@@ -183,6 +194,21 @@ class Simulation:
         self.blocked_by_agent_attempts = 0
         self.blocked_by_environment_attempts = 0
         self.population_history: list[dict[str, int | float]] = []
+        # Auditoria social em resolução por passo e por par de indivíduos.
+        self.social_history: list[dict[str, object]] = []
+        self.social_agent_history: list[dict[str, object]] = []
+        self.social_pair_affinity: dict[tuple[str, str], float] = {}
+        self.social_pair_encounters: dict[tuple[str, str], int] = {}
+        self.social_encounters_total = 0
+        self.social_close_pair_samples = 0
+        for i, first in enumerate(self.agents):
+            for second in self.agents[i + 1:]:
+                pair = tuple(sorted((first.agent_id, second.agent_id)))
+                self.social_pair_affinity[pair] = 0.0
+                self.social_pair_encounters[pair] = 0
+                first.social_affinities[second.agent_id] = 0.0
+                second.social_affinities[first.agent_id] = 0.0
+        self._record_social_agent_snapshot(step=0)
 
         for index, item in enumerate(self.agents):
             key = id(item)
@@ -384,7 +410,83 @@ class Simulation:
             return 0.0
         return sum(float(getattr(item, attribute)) for item in individuals) / len(individuals)
 
+    def _update_social_relationships(self, alive_agents: list[Agent]) -> None:
+        """Atualiza familiaridade entre pares e grava uma linha auditável por par/passo.
+
+        Permanecer próximo aumenta a afinidade lentamente; afastamento grande a
+        reduz de forma gradual. Não há amizade instantânea nem cooperação implícita.
+        """
+        for index, first in enumerate(alive_agents):
+            for second in alive_agents[index + 1:]:
+                pair = tuple(sorted((first.agent_id, second.agent_id)))
+                distance = abs(first.x - second.x) + abs(first.y - second.y)
+                before = self.social_pair_affinity.get(pair, 0.0)
+                close = distance <= 3
+                if close:
+                    sociability_factor = 0.5 + (first.sociability + second.sociability) / 2.0
+                    after = min(1.0, before + 0.025 * sociability_factor)
+                    self.social_pair_encounters[pair] = self.social_pair_encounters.get(pair, 0) + 1
+                    self.social_encounters_total += 1
+                    self.social_close_pair_samples += 1
+                    event = "CLOSE_ENCOUNTER"
+                elif distance > 6:
+                    after = max(0.0, before - 0.002)
+                    event = "AFFINITY_DECAY" if after < before else "NO_CHANGE"
+                else:
+                    after = before
+                    event = "NO_CHANGE"
+                self.social_pair_affinity[pair] = after
+                first.social_affinities[second.agent_id] = after
+                second.social_affinities[first.agent_id] = after
+                self.social_history.append({
+                    "step": self.steps + 1,
+                    "agent_a_id": pair[0],
+                    "agent_b_id": pair[1],
+                    "agent_a_x": first.x if first.agent_id == pair[0] else second.x,
+                    "agent_a_y": first.y if first.agent_id == pair[0] else second.y,
+                    "agent_b_x": second.x if second.agent_id == pair[1] else first.x,
+                    "agent_b_y": second.y if second.agent_id == pair[1] else first.y,
+                    "manhattan_distance": distance,
+                    "within_social_range": close,
+                    "affinity_before": round(before, 6),
+                    "affinity_after": round(after, 6),
+                    "affinity_delta": round(after - before, 6),
+                    "cumulative_close_steps_for_pair": self.social_pair_encounters[pair],
+                    "event": event,
+                })
+
+    def _record_social_agent_snapshot(self, step: int) -> None:
+        alive = self.alive_agents
+        for agent in self.agents:
+            contacts = [
+                other for other in alive if other is not agent
+                and abs(other.x - agent.x) + abs(other.y - agent.y) <= 3
+            ] if agent.alive else []
+            known_affinities = [value for value in agent.social_affinities.values()]
+            ranked = sorted(agent.social_affinities.items(), key=lambda item: (-item[1], item[0]))
+            best_id, best_affinity = ranked[0] if ranked else ("", 0.0)
+            self.social_agent_history.append({
+                "step": step,
+                "agent_id": agent.agent_id,
+                "alive": agent.alive,
+                "x": agent.x,
+                "y": agent.y,
+                "sociability": round(agent.sociability, 6),
+                "close_humans_count": len(contacts),
+                "known_relationships_count": sum(value >= 0.2 for value in known_affinities),
+                "mean_affinity": round(sum(known_affinities) / len(known_affinities), 6) if known_affinities else 0.0,
+                "max_affinity": round(max(known_affinities, default=0.0), 6),
+                "strongest_contact_id": best_id,
+                "strongest_contact_affinity": round(best_affinity, 6),
+            })
+
     def _record_population_metrics(self) -> None:
+        all_pair_affinities = list(self.social_pair_affinity.values())
+        close_pairs = sum(
+            1 for i, first in enumerate(self.alive_agents)
+            for second in self.alive_agents[i + 1:]
+            if abs(first.x - second.x) + abs(first.y - second.y) <= 3
+        )
         self.population_history.append({
             "step": self.steps,
             "alive": len(self.alive_agents),
@@ -412,6 +514,11 @@ class Simulation:
             "carnivore_all_mean_health": self._mean_need(self.carnivores, "health"),
             "carnivore_all_mean_hunger": self._mean_need(self.carnivores, "hunger"),
             "carnivore_all_mean_thirst": self._mean_need(self.carnivores, "thirst"),
+            "social_close_pairs": close_pairs,
+            "social_pair_count": len(all_pair_affinities),
+            "social_mean_pair_affinity": round(sum(all_pair_affinities) / len(all_pair_affinities), 6) if all_pair_affinities else 0.0,
+            "social_relationships_over_0_2": sum(value >= 0.2 for value in all_pair_affinities),
+            "social_encounters_cumulative": self.social_encounters_total,
         })
 
     def _advance_environment(self) -> None:
@@ -560,6 +667,7 @@ class Simulation:
         }
         damage_before = {id(a): dict(a.needs.damage_by_cause) for a in alive_at_start}
         actions: dict[int, tuple[int, int]] = {}
+        self._update_social_relationships(alive_at_start)
 
         # All agents choose actions from the same pre-movement world state.
         # O humano sob controle manual ignora a decisão autônoma neste passo,
@@ -609,6 +717,16 @@ class Simulation:
                 (other.x, other.y) for other in alive_at_start
                 if other is not agent
                 and isinstance(self.world.get_cell(other.x, other.y).structure, Shelter)
+            }
+            visible_social_agents = [
+                other for other in alive_at_start
+                if other is not agent
+                and abs(other.x - agent.x) + abs(other.y - agent.y) <= agent.vision_radius
+            ]
+            agent.social_neighbors = [(other.x, other.y) for other in visible_social_agents]
+            agent.social_neighbor_affinities = {
+                (other.x, other.y): agent.social_affinities.get(other.agent_id, 0.0)
+                for other in visible_social_agents
             }
             actions[id(agent)] = agent.choose_action(nearby, self.world)
 
@@ -1005,6 +1123,7 @@ class Simulation:
                     if cumulative - damage_before[key].get(cause, 0.0) > 0
                 }
 
+        self._record_social_agent_snapshot(step=self.steps + 1)
         self._advance_environment()
 
     def run(self, steps: int) -> None:

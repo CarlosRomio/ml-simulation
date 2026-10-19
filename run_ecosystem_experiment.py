@@ -120,6 +120,10 @@ def _run_row(index: int, seed: int, result: SimulationRunResult) -> dict:
         "final_mean_carnivore_health": final_population.get("carnivore_mean_health", 0.0),
         "final_mean_carnivore_hunger": final_population.get("carnivore_mean_hunger", 0.0),
         "final_mean_carnivore_thirst": final_population.get("carnivore_mean_thirst", 0.0),
+        "final_social_close_pairs": final_population.get("social_close_pairs", 0),
+        "final_social_mean_pair_affinity": final_population.get("social_mean_pair_affinity", 0.0),
+        "final_social_relationships_over_0_2": final_population.get("social_relationships_over_0_2", 0),
+        "social_encounters_cumulative": final_population.get("social_encounters_cumulative", 0),
     }
 
 
@@ -203,6 +207,13 @@ def main() -> None:
     print(f"Sementes bloqueadas pelo limite de plantas: {int(ecology_total('seeds_blocked_by_plant_cap'))}")
     print(f"Sementes bloqueadas por falta de espaço: {int(ecology_total('seeds_blocked_by_space'))}")
     print(f"Redução de sede humana registrada: {ecology_total('water_thirst_reduction_humans'):.2f}")
+    final_social = [result.population_history[-1] for result in results if result.population_history]
+    if final_social:
+        print("\n=== Indicadores sociais finais ===")
+        print(f"Pares próximos (distância <= 3), média final: {_mean([float(row.get('social_close_pairs', 0)) for row in final_social]):.2f}")
+        print(f"Afinidade média entre pares, média final: {_mean([float(row.get('social_mean_pair_affinity', 0)) for row in final_social]):.3f}")
+        print(f"Relações com afinidade >= 0,2, média final: {_mean([float(row.get('social_relationships_over_0_2', 0)) for row in final_social]):.2f}")
+        print(f"Encontros próximos acumulados (soma das execuções): {sum(int(row.get('social_encounters_cumulative', 0)) for row in final_social)}")
     print(f"Tempo: {elapsed:.2f}s")
 
     run_rows = [_run_row(i + 1, base_seed + i, result) for i, result in enumerate(results)]
@@ -210,6 +221,8 @@ def main() -> None:
     population_rows = []
     physiology_rows = []
     ecology_rows = []
+    social_rows = []
+    social_agent_rows = []
     for run_index, result in enumerate(results, start=1):
         for agent_index, metrics in enumerate(result.all_agent_metrics, start=1):
             metric_data = asdict(metrics)
@@ -234,7 +247,9 @@ def main() -> None:
             metric_data["simulated_time_seconds"] = metrics.agent_lifetime_steps * step_duration
             metric_data["step_duration_seconds"] = step_duration
             human_rows.append({"run": run_index, "seed": base_seed + run_index - 1,
-                               "agent_index": agent_index, **metric_data,
+                               "agent_index": agent_index,
+                               "agent_id": result.agent_ids[agent_index - 1] if agent_index - 1 < len(result.agent_ids) else f"H{agent_index:03d}",
+                               **metric_data,
                                "final_inventory_weight": final_inventory.get("inventory_weight", 0.0),
                                "final_inventory_food": final_inventory.get("inventory_food", 0.0),
                                "final_inventory_wood": final_inventory.get("inventory_wood", 0.0),
@@ -246,11 +261,16 @@ def main() -> None:
             population_rows.append({"run": run_index, "seed": base_seed + run_index - 1, **record})
         for record in result.ecology_history:
             ecology_rows.append({"run": run_index, "seed": base_seed + run_index - 1, **record})
+        for record in result.social_history:
+            social_rows.append({"run": run_index, "seed": base_seed + run_index - 1, **record})
+        for record in result.social_agent_history:
+            social_agent_rows.append({"run": run_index, "seed": base_seed + run_index - 1, **record})
         for agent_index, history in enumerate(result.human_physiology_history, start=1):
             for record in history:
                 physiology_rows.append({
                     "run": run_index, "seed": base_seed + run_index - 1,
                     "agent_index": agent_index,
+                    "agent_id": result.agent_ids[agent_index - 1] if agent_index - 1 < len(result.agent_ids) else f"H{agent_index:03d}",
                     "position_before": str(record.get("position_before", "")),
                     "position_after": str(record.get("position_after", "")),
                     "action": str(record.get("action", "")),
@@ -267,12 +287,24 @@ def main() -> None:
     _write_csv(OUTPUT_DIR / "population_history.csv", population_rows)
     _write_csv(OUTPUT_DIR / "human_physiology_history.csv", physiology_rows)
     _write_csv(OUTPUT_DIR / "ecology_history.csv", ecology_rows)
+    _write_csv(OUTPUT_DIR / "social_history.csv", social_rows)
+    _write_csv(OUTPUT_DIR / "social_agents_history.csv", social_agent_rows)
+    # Uma linha final por par, útil para consultar afinidade acumulada sem
+    # precisar filtrar manualmente a série temporal completa.
+    final_relationships = {}
+    for record in social_rows:
+        key = (record["run"], record["agent_a_id"], record["agent_b_id"])
+        final_relationships[key] = record
+    _write_csv(OUTPUT_DIR / "social_relationships_final.csv", list(final_relationships.values()))
     print(f"\nCSV de auditoria gravados em: {OUTPUT_DIR.resolve()}")
     print("  runs.csv — resumo por execução")
     print("  humans.csv — métricas individuais; steps/tempo são a vida do agente e experiment_steps é o horizonte da execução")
     print("  population_history.csv — série temporal de população e fisiologia agregada")
     print("  human_physiology_history.csv — estado, ações e dano de cada humano por passo")
     print("  ecology_history.csv — estoques, coleta de materiais, transições, água e regeneração por passo")
+    print("  social_history.csv — distância e evolução da afinidade de cada par por passo")
+    print("  social_agents_history.csv — estado social individual por passo, com IDs estáveis")
+    print("  social_relationships_final.csv — último estado conhecido de cada relação")
 
 
 if __name__ == "__main__":

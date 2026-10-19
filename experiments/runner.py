@@ -29,6 +29,9 @@ class SimulationRunResult:
     population_history: list[dict[str, int | float]] = field(default_factory=list)
     ecology_history: list[dict[str, int | float]] = field(default_factory=list)
     human_physiology_history: list[list[dict]] = field(default_factory=list)
+    agent_ids: list[str] = field(default_factory=list)
+    social_history: list[dict[str, object]] = field(default_factory=list)
+    social_agent_history: list[dict[str, object]] = field(default_factory=list)
     starvation_agents: int = 0
     living_herbivores: int = 0
     living_carnivores: int = 0
@@ -190,6 +193,9 @@ def run_single_simulation(
         blocked_by_environment_attempts=simulation.blocked_by_environment_attempts,
         population_history=list(simulation.population_history),
         ecology_history=list(simulation.ecology_history),
+        agent_ids=[agent.agent_id for agent in simulation.agents],
+        social_history=list(simulation.social_history),
+        social_agent_history=list(simulation.social_agent_history),
         human_physiology_history=[
             [{
                 "step": 0,

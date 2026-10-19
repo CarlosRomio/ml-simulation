@@ -119,3 +119,26 @@ Para testar: selecione um humano, ative `M`, construa o abrigo com `B`, pression
 - Quando não há abrigo a até 8 células de distância, agentes com fome abaixo de 25 e sede abaixo de 25 procuram madeira e pedra para construção.
 - O custo é 5 unidades de madeira e 2 de pedra. Ao reunir os materiais, o agente procura uma célula livre, sem recurso/obstáculo/estrutura, e constrói se o local estiver a mais de 8 células de outro abrigo.
 - O comportamento é baseado em regras explícitas, não em aprendizado de máquina. O controle manual desativa a construção autônoma para o humano controlado.
+
+### Etapa 1 de comportamento social: proximidade espontânea
+
+Cada humano possui um traço estável de `sociability` entre 0 e 1. A fábrica atribui valores individuais reproduzíveis quando a simulação recebe uma seed; o traço não é recalculado a cada passo. Agentes com sociabilidade abaixo de 0,35 não procuram ativamente outros humanos. Os demais podem escolher uma célula livre próxima de outro humano quando fome e sede estão abaixo de 25 e a energia está acima de 25.
+
+A distância desejada depende do traço: sociabilidade alta tende a aproximar mais o agente; valores médios e baixos mantêm mais espaço. Se já existe outro humano dentro dessa distância, o agente não continua perseguindo pessoas e pode retomar exploração. A interação social tem prioridade inferior a caça ativa, construção, busca de abrigo e coleta de materiais necessários, e não substitui a procura de alimento/água quando as necessidades ficam relevantes. Humanos sob controle manual não recebem decisões autônomas de movimento social.
+
+Na lateral, a seção **SOCIAL** exibe a sociabilidade do humano selecionado e a quantidade de humanos a até três células. Isso é um indicador de proximidade, não uma relação social ou cooperação estabelecida. Nesta etapa não há amizade, memória de indivíduos, comunicação, compartilhamento deliberado nem aprendizagem: o objetivo é observar se a atração espacial moderada já produz agrupamentos espontâneos.
+
+
+## Identificação e auditoria social
+
+Cada humano recebe um identificador estável dentro da execução (`H001`, `H002`, ...). O ID aparece na barra lateral do humano selecionado e, quando o zoom é suficiente, como rótulo sobre os agentes no mapa. Os mesmos IDs são usados nos arquivos CSV, permitindo relacionar a observação visual aos dados exportados.
+
+A afinidade social é mantida por par de humanos e varia entre 0 e 1. Permanecer a até três células de distância aumenta a afinidade lentamente; ficar a mais de seis células reduz a afinidade de forma gradual. A afinidade influencia qual humano visível o agente prefere procurar, mas não cria amizade instantânea nem cooperação automática.
+
+Ao executar `py -3.13 run_ecosystem_experiment.py`, a pasta `results/ecosystem_experiment/` inclui também:
+
+- `social_history.csv`: uma linha por par vivo e passo, com IDs, posições, distância Manhattan, afinidade anterior/atual, variação, encontros próximos acumulados e evento.
+- `social_agents_history.csv`: estado social individual por passo, incluindo ID, sociabilidade, posição, humanos próximos, quantidade de relações relevantes e afinidade mais alta.
+- `social_relationships_final.csv`: último registro disponível de cada par em cada execução. Se um agente morrer antes do fim, o último registro pode ser anterior ao passo final.
+
+`population_history.csv` e `runs.csv` incluem indicadores agregados de proximidade e afinidade. Os valores são instrumentação descritiva: proximidade não deve ser interpretada automaticamente como cooperação ou amizade.

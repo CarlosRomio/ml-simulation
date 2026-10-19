@@ -7,6 +7,9 @@ from agents.species import Species
 
 
 class AgentRenderer:
+    def __init__(self) -> None:
+        self.label_font = pygame.font.SysFont("consolas", 11, bold=True)
+
     def draw(
         self,
         screen: pygame.Surface,
@@ -34,3 +37,11 @@ class AgentRenderer:
             pygame.draw.circle(screen, (245, 220, 90), center, radius + max(2, cell_size // 10), width=max(2, cell_size // 12))
         pygame.draw.circle(screen, color, center, radius)
         pygame.draw.circle(screen, (24, 34, 28), center, radius, width=max(1, cell_size // 18))
+        # Em zoom alto rotula todos os humanos; em zoom distante mantém apenas
+        # o ID do indivíduo selecionado para evitar poluição visual.
+        if selected or cell_size >= 16:
+            label = self.label_font.render(agent.agent_id or "H?", True, (250, 245, 225))
+            label_rect = label.get_rect(midbottom=(center[0], center[1] - radius - 2))
+            background = label_rect.inflate(4, 2)
+            pygame.draw.rect(screen, (28, 34, 30), background, border_radius=2)
+            screen.blit(label, label_rect)

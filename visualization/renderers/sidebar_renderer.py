@@ -107,7 +107,7 @@ class SidebarRenderer:
         agent = simulation.observed_agent
         health_color = (225, 100, 85) if agent.health <= agent.needs.max_health * 0.3 else (105, 200, 125)
         health_label = self.small_font.render(
-            f"SAÚDE #{simulation.agents.index(agent) + 1}: {agent.health:.1f}/{agent.needs.max_health:.0f}",
+            f"SAÚDE {agent.agent_id or f'H{simulation.agents.index(agent) + 1:03d}'}: {agent.health:.1f}/{agent.needs.max_health:.0f}",
             True, TEXT_COLOR,
         )
         screen.blit(health_label, (GRID_PADDING, 73))
@@ -168,11 +168,19 @@ class SidebarRenderer:
             ("row", "Pedra", f"{simulation.world.get_storage_counts()['storage_stone_units']:g}"),
             ("row", "Peso armazenado", f"{simulation.world.get_storage_counts()['storage_weight']:g} / {simulation.world.get_storage_counts()['storage_capacity_weight']:g}"),
             ("gap", 5),
-            ("section", f"AGENTE #{simulation.agents.index(agent) + 1}"),
+            ("section", f"AGENTE {agent.agent_id or f'H{simulation.agents.index(agent) + 1:03d}'}"),
             ("row", "Estado", "VIVO" if agent.alive else "MORTO",
              ENERGY_COLOR if agent.alive else ENERGY_LOW_COLOR),
             ("row", "Controle", "MANUAL" if simulation.manual_control_agent is agent else "IA",
              (245, 220, 90) if simulation.manual_control_agent is agent else MUTED_COLOR),
+            ("section", "SOCIAL"),
+            ("row", "Sociabilidade", f"{agent.sociability:.2f}"),
+            ("row", "Humanos próximos (3)", str(sum(
+                1 for other in simulation.alive_agents if other is not agent
+                and abs(other.x - agent.x) + abs(other.y - agent.y) <= 3
+            ))),
+            ("row", "Relações (afinidade >= 0,2)", str(sum(value >= 0.2 for value in agent.social_affinities.values()))),
+            *self._social_relationship_rows(agent, simulation),
             ("bar", "Saúde", agent.health, agent.needs.max_health,
              (225, 100, 85) if agent.health <= agent.needs.max_health * 0.3 else (105, 200, 125)),
             ("bar", "Estamina", agent.energy, agent.max_energy, ENERGY_COLOR),
@@ -195,6 +203,18 @@ class SidebarRenderer:
             ("row", "Caças concluídas", str(simulation.animals_killed)),
         ])
         return rows
+
+    @staticmethod
+    def _social_relationship_rows(agent, simulation):
+        if not agent.social_affinities:
+            return [("row", "Afinidades", "ainda sem histórico", MUTED_COLOR)]
+        names = {other.agent_id: other for other in simulation.agents}
+        ranked = sorted(agent.social_affinities.items(), key=lambda item: (-item[1], item[0]))[:3]
+        return [
+            ("row", f"Afinidade {other_id}", f"{affinity:.2f}",
+             (125, 205, 150) if affinity >= 0.2 else MUTED_COLOR)
+            for other_id, affinity in ranked if other_id in names
+        ]
 
     @staticmethod
     def _recent_damage_rows(simulation, agent):
