@@ -14,6 +14,7 @@ from environment.resources import MaterialKind, MaterialResource, Water, Plant, 
 from environment.storage import Storage
 from environment.shelter import Shelter
 from metrics.tracker import SimulationMetrics
+from configuration.social_behavior_config import SocialBehaviorConfig
 
 
 FOOD_ENERGY = 35.0
@@ -104,6 +105,9 @@ class Simulation:
         herbivores: list[Herbivore] | None = None,
         carnivores: list[Carnivore] | None = None,
         rng: Random | None = None,
+        social_config: SocialBehaviorConfig | None = None,
+        social_behavior_enabled: bool = True,
+        social_memory_enabled: bool = True,
     ):
         if step_duration_seconds <= 0:
             raise ValueError("A duração do passo deve ser positiva.")
@@ -182,6 +186,10 @@ class Simulation:
         self.resource_update_interval = resource_update_interval
         self.rng = rng if rng is not None else world.rng
         self.perception = Perception()
+        self.social_config = social_config or SocialBehaviorConfig()
+        self.social_config.validate()
+        self.social_behavior_enabled = social_behavior_enabled
+        self.social_memory_enabled = social_memory_enabled
 
         self.metrics_by_agent: dict[int, SimulationMetrics] = {}
         self.energy_history_by_agent: dict[int, list[float]] = {}
@@ -197,6 +205,7 @@ class Simulation:
         # Auditoria social em resolução por passo e por par de indivíduos.
         self.social_history: list[dict[str, object]] = []
         self.social_agent_history: list[dict[str, object]] = []
+        self.social_decision_history: list[dict[str, object]] = []
         self.social_pair_affinity: dict[tuple[str, str], float] = {}
         self.social_pair_encounters: dict[tuple[str, str], int] = {}
         self.social_encounters_total = 0
@@ -424,13 +433,13 @@ class Simulation:
                 close = distance <= 3
                 if close:
                     sociability_factor = 0.5 + (first.sociability + second.sociability) / 2.0
-                    after = min(1.0, before + 0.025 * sociability_factor)
+                    after = min(1.0, before + self.social_config.affinity_gain_per_close_step * sociability_factor)
                     self.social_pair_encounters[pair] = self.social_pair_encounters.get(pair, 0) + 1
                     self.social_encounters_total += 1
                     self.social_close_pair_samples += 1
                     event = "CLOSE_ENCOUNTER"
                 elif distance > 6:
-                    after = max(0.0, before - 0.002)
+                    after = max(0.0, before - self.social_config.affinity_decay_per_far_step)
                     event = "AFFINITY_DECAY" if after < before else "NO_CHANGE"
                 else:
                     after = before
@@ -455,6 +464,34 @@ class Simulation:
                     "event": event,
                 })
 
+    def _record_social_decision(
+        self, agent: Agent, step: int, position_before: tuple[int, int],
+        action: tuple[int, int], moved: bool,
+    ) -> None:
+        # Só registramos bloqueio social quando a política do agente o marcou
+        # explicitamente após avaliar contatos. Necessidades altas, isoladamente,
+        # não provam que havia uma decisão social elegível a ser bloqueada.
+        decision = dict(agent.last_social_decision)
+        self.social_decision_history.append({
+            "step": step,
+            "agent_id": agent.agent_id,
+            "decision": decision.get("decision", "OTHER_BEHAVIOR_PRIORITY"),
+            "reason": decision.get("reason", "SOCIAL_DRIVE_NOT_REACHED"),
+            "target_agent_id": decision.get("target_agent_id", ""),
+            "target_affinity": decision.get("target_affinity", 0.0),
+            "target_last_seen_age": decision.get("target_last_seen_age", -1),
+            "target_x": decision.get("target_x", ""),
+            "target_y": decision.get("target_y", ""),
+            "x_before": position_before[0], "y_before": position_before[1],
+            "x_after": agent.x, "y_after": agent.y,
+            "action_dx": action[0], "action_dy": action[1],
+            "moved": bool(moved),
+            "sociability": round(agent.sociability, 6),
+            "hunger": round(agent.hunger, 4),
+            "thirst": round(agent.thirst, 4),
+            "energy": round(agent.energy, 4),
+        })
+
     def _record_social_agent_snapshot(self, step: int) -> None:
         alive = self.alive_agents
         for agent in self.agents:
@@ -472,6 +509,11 @@ class Simulation:
                 "x": agent.x,
                 "y": agent.y,
                 "sociability": round(agent.sociability, 6),
+                "personality_curiosity": round(agent.personality.curiosity, 6),
+                "personality_risk_aversion": round(agent.personality.risk_aversion, 6),
+                "personality_aggressiveness": round(agent.personality.aggressiveness, 6),
+                "personality_persistence": round(agent.personality.persistence, 6),
+                "personality_reward_sensitivity": round(agent.personality.reward_sensitivity, 6),
                 "close_humans_count": len(contacts),
                 "known_relationships_count": sum(value >= 0.2 for value in known_affinities),
                 "mean_affinity": round(sum(known_affinities) / len(known_affinities), 6) if known_affinities else 0.0,
@@ -674,6 +716,11 @@ class Simulation:
         # mas continua sujeito a colisões, necessidades e interações normais.
         for agent in alive_at_start:
             if agent is self.manual_control_agent:
+                agent.last_social_decision = {
+                    "decision": "MANUAL_CONTROL", "reason": "AUTONOMOUS_DECISION_BYPASSED",
+                    "target_agent_id": "", "target_affinity": 0.0,
+                    "target_last_seen_age": -1, "target_x": "", "target_y": "",
+                }
                 actions[id(agent)] = self.manual_action
                 continue
             nearby = self.perception.observe(
@@ -720,20 +767,60 @@ class Simulation:
             }
             visible_social_agents = [
                 other for other in alive_at_start
-                if other is not agent
+                if self.social_behavior_enabled
+                and other is not agent
                 and abs(other.x - agent.x) + abs(other.y - agent.y) <= agent.vision_radius
             ]
+            current_step = self.steps + 1
+            agent.social_reunion_affinity_threshold = self.social_config.reunion_affinity_threshold
+            agent.social_reunion_max_distance = self.social_config.reunion_max_distance
             agent.social_neighbors = [(other.x, other.y) for other in visible_social_agents]
             agent.social_neighbor_affinities = {
                 (other.x, other.y): agent.social_affinities.get(other.agent_id, 0.0)
                 for other in visible_social_agents
             }
+            agent.social_neighbor_ids = {
+                (other.x, other.y): other.agent_id for other in visible_social_agents
+            }
+            if self.social_behavior_enabled and self.social_memory_enabled:
+                for other in visible_social_agents:
+                    agent.social_known_contacts[other.agent_id] = {
+                        "x": other.x, "y": other.y, "last_seen_step": current_step,
+                    }
+                agent.social_known_contacts = {
+                    contact_id: memory
+                    for contact_id, memory in agent.social_known_contacts.items()
+                    if current_step - int(memory.get("last_seen_step", current_step)) <= self.social_config.memory_ttl_steps
+                    and any(other.agent_id == contact_id and other.alive for other in self.agents)
+                }
+                agent.social_candidate_contacts = []
+                for contact_id, memory in agent.social_known_contacts.items():
+                    age = current_step - int(memory.get("last_seen_step", current_step))
+                    distance = abs(int(memory["x"]) - agent.x) + abs(int(memory["y"]) - agent.y)
+                    if distance > self.social_config.reunion_max_distance:
+                        continue
+                    agent.social_candidate_contacts.append({
+                        "agent_id": contact_id, "x": int(memory["x"]), "y": int(memory["y"]),
+                        "affinity": agent.social_affinities.get(contact_id, 0.0),
+                        "last_seen_age": age,
+                        "visible": any(other.agent_id == contact_id for other in visible_social_agents),
+                    })
+            else:
+                agent.social_known_contacts.clear()
+                agent.social_candidate_contacts = []
             actions[id(agent)] = agent.choose_action(nearby, self.world)
 
         # Cada tecla corresponde a um único passo, evitando movimento contínuo
         # involuntário quando a simulação está em velocidade acelerada.
         self.manual_action = (0, 0)
         moved_by_id = self._resolve_movements(actions)
+        for agent in alive_at_start:
+            self._record_social_decision(
+                agent=agent, step=self.steps + 1,
+                position_before=before[id(agent)],
+                action=actions.get(id(agent), (0, 0)),
+                moved=moved_by_id.get(id(agent), False),
+            )
 
         sampled_states: dict[int, tuple[float, float, float, float]] = {}
 
@@ -758,6 +845,7 @@ class Simulation:
             drank_water = False
             water_thirst_reduction = 0.0
             collected_resource_type = "NONE"
+            collected_food_quantity = 0.0
             current_resource = self.world.get_cell(agent.x, agent.y).resource
             if isinstance(current_resource, Water) and agent.thirst > 0:
                 drank_water = True
@@ -787,11 +875,13 @@ class Simulation:
                 if isinstance(resource, Plant):
                     collected_resource_type = "PLANT"
                     accepted_food = agent.inventory.add_food(1.0)
+                    collected_food_quantity = accepted_food
                     if accepted_food < 1.0 - 1e-9:
                         raise RuntimeError("A planta foi removida sem caber integralmente no inventário.")
                 elif isinstance(resource, Food):
                     collected_resource_type = "FOOD"
                     accepted_food = agent.inventory.add_food(resource.quantity)
+                    collected_food_quantity = accepted_food
                     if accepted_food < resource.quantity - 1e-9:
                         raise RuntimeError("O alimento foi coletado além da capacidade do inventário.")
                 elif isinstance(resource, MaterialResource):
@@ -886,7 +976,9 @@ class Simulation:
                 "energy_before": energy_before[key],
                 "energy_after": agent.energy,
                 "collected_food": collected_food,
+                "collected_food_quantity": collected_food_quantity,
                 "collected_resource_type": collected_resource_type,
+                "behavior_intent": agent.last_behavior_intent,
                 "inventory_weight": agent.inventory.current_weight,
                 "inventory_food": agent.inventory.food_quantity,
                 "food_consumed": consumed_food,

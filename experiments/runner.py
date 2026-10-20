@@ -32,6 +32,7 @@ class SimulationRunResult:
     agent_ids: list[str] = field(default_factory=list)
     social_history: list[dict[str, object]] = field(default_factory=list)
     social_agent_history: list[dict[str, object]] = field(default_factory=list)
+    social_decision_history: list[dict[str, object]] = field(default_factory=list)
     starvation_agents: int = 0
     living_herbivores: int = 0
     living_carnivores: int = 0
@@ -100,6 +101,8 @@ def run_single_simulation(
     scenario: Scenario | None = None,
     seed_spawn_count: int = 1,
     max_plants: int = 100,
+    social_behavior_enabled: bool = True,
+    social_memory_enabled: bool = True,
 ) -> SimulationRunResult:
     """Executa uma simulação e retorna métricas do agente e do ambiente."""
     rng = random.Random(run_seed)
@@ -163,6 +166,8 @@ def run_single_simulation(
         seed_spawn_count=seed_spawn_count,
         max_plants=max_plants,
         rng=random.Random(run_seed + 3_000_000),
+        social_behavior_enabled=social_behavior_enabled,
+        social_memory_enabled=social_memory_enabled,
     )
     simulation.run(max_steps)
 
@@ -196,6 +201,7 @@ def run_single_simulation(
         agent_ids=[agent.agent_id for agent in simulation.agents],
         social_history=list(simulation.social_history),
         social_agent_history=list(simulation.social_agent_history),
+        social_decision_history=list(simulation.social_decision_history),
         human_physiology_history=[
             [{
                 "step": 0,
@@ -216,7 +222,8 @@ def run_single_simulation(
                 "thirst_before": simulation.metrics_by_agent[id(agent)].initial_thirst,
                 "thirst_after_physiology": simulation.metrics_by_agent[id(agent)].initial_thirst,
                 "thirst_after": simulation.metrics_by_agent[id(agent)].initial_thirst,
-                "collected_food": False, "collected_resource_type": "NONE",
+                "collected_food": False, "collected_food_quantity": 0.0,
+                "collected_resource_type": "NONE", "behavior_intent": "INITIAL",
                 "inventory_weight": agent.inventory.current_weight,
                 "inventory_food": agent.inventory.food_quantity,
                 "food_consumed": 0.0,

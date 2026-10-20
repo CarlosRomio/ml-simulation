@@ -139,6 +139,9 @@ class SidebarRenderer:
         alive_herbivores = len(simulation.alive_herbivores)
         alive_carnivores = len(simulation.alive_carnivores)
         water_count = len(simulation.world.get_water_positions())
+        decision_trace = agent.last_decision_trace or {}
+        decision_score = decision_trace.get("score")
+        decision_alternatives = decision_trace.get("alternatives", [])
         rows.extend([
             ("section", "MUNDO"),
             ("row", "Passos", str(simulation.steps)),
@@ -173,8 +176,21 @@ class SidebarRenderer:
              ENERGY_COLOR if agent.alive else ENERGY_LOW_COLOR),
             ("row", "Controle", "MANUAL" if simulation.manual_control_agent is agent else "IA",
              (245, 220, 90) if simulation.manual_control_agent is agent else MUTED_COLOR),
+            ("section", "PERSONALIDADE"),
+            ("row", "Curiosidade", f"{agent.personality.curiosity:.2f}"),
+            ("row", "Aversão ao risco", f"{agent.personality.risk_aversion:.2f}"),
+            ("row", "Sociabilidade", f"{agent.personality.sociability:.2f}"),
+            ("row", "Agressividade", f"{agent.personality.aggressiveness:.2f}"),
+            ("row", "Persistência", f"{agent.personality.persistence:.2f}"),
+            ("row", "Sensib. recompensa", f"{agent.personality.reward_sensitivity:.2f}"),
+            ("section", "DECISÃO"),
+            ("row", "Intenção atual", str(agent.last_behavior_intent)),
+            ("row", "Última ação avaliada", str(
+                decision_trace.get("intent", "prioridade comportamental")
+            )),
+            ("row", "Valor da decisão", f"{float(decision_score):.2f}" if decision_score is not None else "—"),
+            ("row", "Alternativas comparadas", str(len(decision_alternatives))),
             ("section", "SOCIAL"),
-            ("row", "Sociabilidade", f"{agent.sociability:.2f}"),
             ("row", "Humanos próximos (3)", str(sum(
                 1 for other in simulation.alive_agents if other is not agent
                 and abs(other.x - agent.x) + abs(other.y - agent.y) <= 3

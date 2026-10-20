@@ -43,10 +43,12 @@ def test_metrics_track_starvation():
     agent.consume_energy(99)
     simulation.step()
 
-    # Estamina zerada limita corrida, mas não é uma causa de morte.
+    # O seletor cognitivo pode escolher repousar quando a estamina está
+    # esgotada; energia é recuperável e não é uma causa de morte.
     assert simulation.metrics.termination_cause == "RUNNING"
-    assert simulation.metrics.final_energy == 0.0
-    assert agent.alive  # Estamina zerada não é uma causa de morte.
+    assert simulation.metrics.final_energy == agent.energy
+    assert simulation.metrics.final_energy >= 0.0
+    assert agent.alive
 
 
 def test_metrics_track_simulated_time():

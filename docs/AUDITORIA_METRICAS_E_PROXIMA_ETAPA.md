@@ -23,7 +23,7 @@
 - A estamina final é alta para sobreviventes, mas isso não prova que seu custo esteja calibrado incorretamente. É preciso observar custo por ação, recuperação, frequência de repouso e estados em que ações ficam indisponíveis.
 - O número de ataques não equivale ao número de encontros, nem ao sucesso da caça. Devemos registrar separadamente encontros, tentativas, acertos, falhas, dano e recurso alimentar obtido.
 
-## Próxima evolução proposta: contabilidade de recursos do ambiente
+## Evolução implementada: contabilidade de recursos do ambiente
 
 A próxima implementação deve ampliar a observabilidade ecológica e preparar o ambiente para um modelo de recursos mais geral, sem introduzir ainda inventário, agricultura, construções ou aprendizado de máquina.
 
@@ -71,3 +71,10 @@ Enviar os cinco CSVs gerados em `results/ecosystem_experiment/` para a próxima 
 Os humanos recebem IDs estáveis (`H001`, `H002`, ...) por execução. A simulação mantém afinidade persistente por par, registra a distância e as alterações da afinidade por passo, e gera um histórico social individual. A proximidade (distância Manhattan <= 3) incrementa afinidade de forma lenta, ponderada pela sociabilidade dos dois agentes; separação superior a seis células reduz a afinidade lentamente. A escolha social favorece indivíduos visíveis com maior afinidade, com distância como critério secundário.
 
 Os logs sociais são exportados por `run_ecosystem_experiment.py` para `social_history.csv`, `social_agents_history.csv` e `social_relationships_final.csv`. Esses dados permitem diferenciar encontros ocasionais de relações recorrentes; não são, por si só, evidência de cooperação.
+
+
+## Memória social, reencontro e auditoria de decisões
+
+A configuração `SocialBehaviorConfig` centraliza ganho de afinidade, decaimento, limiar de afinidade para reencontro, duração da memória espacial e distância máxima de busca. A afinidade relacional permanece mesmo quando a posição lembrada expira; posições são atualizadas apenas quando um indivíduo é percebido novamente. Isso evita conhecimento omnisciente da localização atual de outros agentes.
+
+O arquivo `social_decisions_history.csv` registra uma linha por humano vivo e passo, com decisão, motivo, alvo social, afinidade, idade da última observação, posição antes/depois e se houve deslocamento. Decisões `SOCIAL_REUNION_SEARCH_FAILED` indicam que o agente chegou à última posição conhecida sem encontrar o contato e descartou aquela memória espacial, preservando a afinidade.

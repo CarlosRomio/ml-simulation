@@ -34,3 +34,5 @@ plots/
 # Sistema operacional
 .DS_Store
 Thumbs.db
+# Arquivos temporários de edição
+*.tmp

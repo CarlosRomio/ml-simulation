@@ -1,6 +1,6 @@
 # ML Simulation — auditoria fisiológica e ecológica
 
-Projeto de simulação em grade para estudar sobrevivência de humanos e interações com herbívoros e carnívoros. Nesta etapa, os agentes usam regras explícitas; não há aprendizado de máquina treinado.
+Projeto de simulação em grade para estudar sobrevivência de humanos e interações com herbívoros e carnívoros. A arquitetura está migrando gradualmente de prioridades rígidas para decisões avaliadas. A simulação ainda não treina um modelo de ML nem atualiza recompensas automaticamente; consulte `docs/AGENT_COGNITION.md` para o estado exato desta etapa.
 
 ## Executar
 
@@ -8,6 +8,32 @@ Projeto de simulação em grade para estudar sobrevivência de humanos e intera�
 py -3.13 -m pytest -q
 py -3.13 run_ecosystem_experiment.py
 ```
+
+## Comparação controlada do comportamento social
+
+Para comparar as regras sociais sem confundir as condições com cenários aleatórios diferentes, execute:
+
+```powershell
+py -3.13 run_social_comparison.py
+```
+
+Por padrão, o comparador usa paralelismo por processos automaticamente: até 8 processos, limitados ao número de réplicas, deixando um processador lógico livre quando possível. Para controlar a carga, use `--workers 1` para execução sequencial ou `--workers 4` para limitar a quatro processos.
+
+O padrão é 30 réplicas pareadas por condição, 1.000 passos, 5 humanos, 8 herbívoros e 3 carnívoros. As três condições são:
+
+- `A_CONTROLE`: sociabilidade, afinidade e memória espacial atuais.
+- `B_SEM_INFLUENCIA_SOCIAL`: aproximação e reencontro social desativados; as métricas de proximidade e afinidade continuam sendo observadas.
+- `C_SEM_MEMORIA`: aproximação social e afinidade ativas, mas sem memória espacial nem busca de reencontro.
+
+Cada réplica usa o mesmo cenário e a mesma semente nas três condições. A diferença entre condições é a política social. Os resultados são gravados em `results/social_comparison/`: `runs.csv` (execução individual), `summary.csv` (médias, desvios-padrão e IC95% aproximados), `paired_deltas.csv` (diferença por semente), `paired_summary.csv` (média e IC95% das diferenças pareadas), `group_history.csv` (grupos por passo) e `group_events.csv` (formação, dissolução e mudanças de composição), e `agent_activity_history.csv` (uma linha por humano/passo, com decisão social, movimento, coleta de alimento, consumo, água e necessidades fisiológicas) e `activity_interval_summary.csv` (agregação temporal, por execução, em janelas de 100 passos; alterável com `--interval-steps`). `runs.csv` e `summary.csv` também incluem movimento social/não social, passos ociosos, coleta/consumo de alimento, ingestão de água, passos em necessidades críticas e prioridades fisiológicas que impediram uma decisão social. O limiar de afinidade para definir um grupo é 0,5 e pode ser alterado com `--affinity-threshold`.
+
+Para validar rapidamente a execução antes de rodar o experimento completo:
+
+```powershell
+py -3.13 run_social_comparison.py --runs 2 --steps 30 --workers 1
+```
+
+Os grupos são componentes conectados de relações com afinidade igual ou superior ao limiar; só componentes com pelo menos dois integrantes contam como grupos. Afinidade e proximidade não equivalem a cooperação. O sucesso de reencontro é contado apenas quando o agente-alvo real aparece a até três células dentro da janela de 30 passos após o início da tentativa, não quando o agente apenas chega à posição lembrada.
 
 O experimento ecológico usa 20 sementes reproduzíveis, 300 passos por execução e as configurações declaradas em `run_ecosystem_experiment.py`. Os CSVs são gerados em `results/ecosystem_experiment/`:
 
@@ -25,6 +51,17 @@ py -3.13 run_regeneration_comparison.py
 ```
 
 O experimento compara 0, 1 e 2 sementes solicitadas por atualização, com 20 execuções pareadas por tratamento e 300 passos. Cada tratamento começa com 54 plantas maduras, 18 itens de alimento estático, 18 fontes de água, 9 obstáculos e 5 humanos, 8 herbívoros e 3 carnívoros. Apenas `seed_spawn_count` muda entre tratamentos. Usa até quatro processos. Os CSVs são gravados em `results/regeneration_comparison/`. Consulte `docs/REGENERATION_COMPARISON.md` para o desenho experimental, a semântica das métricas e as limitações conhecidas.
+
+
+## Arquitetura cognitiva dos agentes (primeira etapa)
+
+Os humanos recebem traços individuais reproduzíveis quando são criados pela `AgentFactory`: curiosidade, aversão ao risco, sociabilidade, agressividade, persistência e sensibilidade à recompensa. Os traços ficam entre 0 e 1 e são registrados em `social_agents_history.csv`; a barra lateral também mostra o perfil do humano selecionado. Traços são preferências, não comandos diretos de comportamento.
+
+`agents/cognition/decision.py` define `ActionCandidate`, `DecisionEngine` e o registro explicável dos valores que compõem uma decisão. Nesta primeira etapa, o seletor é usado na escolha entre contatos sociais elegíveis e nos movimentos de exploração. Necessidades fisiológicas, construção, caça e outros comportamentos ainda mantêm partes da política anterior por prioridade; a migração será gradual para evitar alterar simultaneamente muitas regras.
+
+`agents/cognition/experience.py` fornece uma memória incremental de resultados por tipo de ação. A atualização é explícita por `agent.record_action_outcome(reward)`, com recompensa normalizada entre -1 e 1, e só pode ser aplicada a uma decisão cognitiva recém-selecionada. O simulador ainda não calcula recompensas automaticamente: antes disso precisamos definir atribuição de crédito para ações que duram vários passos, para não ensinar ao agente uma relação causal incorreta.
+
+Veja `docs/AGENT_COGNITION.md` para o contrato das ações, a função de avaliação, os limites atuais e a sequência planejada.
 
 ## Convenções fisiológicas
 
@@ -133,12 +170,15 @@ Na lateral, a seção **SOCIAL** exibe a sociabilidade do humano selecionado e a
 
 Cada humano recebe um identificador estável dentro da execução (`H001`, `H002`, ...). O ID aparece na barra lateral do humano selecionado e, quando o zoom é suficiente, como rótulo sobre os agentes no mapa. Os mesmos IDs são usados nos arquivos CSV, permitindo relacionar a observação visual aos dados exportados.
 
-A afinidade social é mantida por par de humanos e varia entre 0 e 1. Permanecer a até três células de distância aumenta a afinidade lentamente; ficar a mais de seis células reduz a afinidade de forma gradual. A afinidade influencia qual humano visível o agente prefere procurar, mas não cria amizade instantânea nem cooperação automática.
+A afinidade social é mantida por par de humanos e varia entre 0 e 1. Permanecer a até três células de distância aumenta a afinidade lentamente; ficar a mais de seis células reduz a afinidade de forma gradual. A memória da posição de um contato é atualizada apenas quando ele é percebido e expira após um prazo configurável; a afinidade pode persistir durante o afastamento. Com afinidade suficiente, o agente pode navegar até a última posição conhecida para tentar reencontrar o indivíduo, sem conhecer sua posição atual fora do alcance de percepção. Isso não cria amizade consciente nem cooperação automática.
 
 Ao executar `py -3.13 run_ecosystem_experiment.py`, a pasta `results/ecosystem_experiment/` inclui também:
 
 - `social_history.csv`: uma linha por par vivo e passo, com IDs, posições, distância Manhattan, afinidade anterior/atual, variação, encontros próximos acumulados e evento.
 - `social_agents_history.csv`: estado social individual por passo, incluindo ID, sociabilidade, posição, humanos próximos, quantidade de relações relevantes e afinidade mais alta.
 - `social_relationships_final.csv`: último registro disponível de cada par em cada execução. Se um agente morrer antes do fim, o último registro pode ser anterior ao passo final.
+- `social_decisions_history.csv`: decisão social de cada humano por passo, alvo, afinidade, idade da última observação, motivo, posições antes/depois e se houve movimento.
+
+Os parâmetros podem ser ajustados em `configuration/social_behavior_config.py` por meio de `SocialBehaviorConfig`: ganho de afinidade, decaimento, limiar de reencontro, duração da memória espacial e distância máxima de busca. Para alterar a configuração de uma simulação criada por código, passe `social_config=...` ao construtor de `Simulation`.
 
 `population_history.csv` e `runs.csv` incluem indicadores agregados de proximidade e afinidade. Os valores são instrumentação descritiva: proximidade não deve ser interpretada automaticamente como cooperação ou amizade.

@@ -133,7 +133,7 @@ def test_large_separation_gradually_decays_affinity():
 
     simulation._update_social_relationships([first, second])
 
-    assert first.social_affinities[second.agent_id] == pytest.approx(0.498)
+    assert first.social_affinities[second.agent_id] == pytest.approx(0.4995)
     assert simulation.social_history[-1]["event"] == "AFFINITY_DECAY"
 
 
@@ -164,3 +164,75 @@ def test_affinity_can_make_agent_prefer_known_human_over_nearer_stranger():
 
     assert agent.target is not None
     assert abs(agent.target[0] - familiar.x) + abs(agent.target[1] - familiar.y) == 1
+
+
+def test_social_behavior_config_allows_slower_affinity_decay():
+    from configuration.social_behavior_config import SocialBehaviorConfig
+
+    config = SocialBehaviorConfig(affinity_decay_per_far_step=0.0001)
+    config.validate()
+    world = World(width=20, height=8, food_count=0, obstacle_count=0, rng=random.Random(36))
+    first = Agent(1, 1, sociability=0.9)
+    second = Agent(15, 1, sociability=0.9)
+    simulation = Simulation(world, agents=[first, second], seed_spawn_count=0, social_config=config)
+    pair = ("H001", "H002")
+    simulation.social_pair_affinity[pair] = 0.5
+    first.social_affinities[second.agent_id] = 0.5
+    second.social_affinities[first.agent_id] = 0.5
+
+    simulation._update_social_relationships([first, second])
+
+    assert first.social_affinities[second.agent_id] == pytest.approx(0.4999)
+
+
+def test_agent_remembers_visible_contact_and_can_attempt_reunion_from_memory():
+    world = World(width=20, height=8, food_count=0, obstacle_count=0, rng=random.Random(37))
+    first = Agent(2, 2, vision_radius=4, sociability=0.9)
+    second = Agent(6, 2, vision_radius=4, sociability=0.9)
+    simulation = Simulation(world, agents=[first, second], seed_spawn_count=0)
+    pair = ("H001", "H002")
+    simulation.social_pair_affinity[pair] = 0.8
+    first.social_affinities[second.agent_id] = 0.8
+    second.social_affinities[first.agent_id] = 0.8
+
+    # First step records the contact, then the second individual moves out of view.
+    simulation.step()
+    assert "H002" in first.social_known_contacts
+    second.x, second.y = 14, 2
+    first.social_neighbors = []
+    first.social_candidate_contacts = [{
+        "agent_id": "H002", "x": 8, "y": 2, "affinity": 0.8,
+        "last_seen_age": 1, "visible": False,
+    }]
+    first._clear_target()
+    first.occupied_positions = {(second.x, second.y)}
+    first.choose_action([], world)
+
+    assert first.last_social_decision["decision"] in {"SOCIAL_REUNION", "SOCIAL_TARGET_UNREACHABLE"}
+    assert first.last_social_decision["target_agent_id"] == "H002"
+
+
+def test_social_decision_history_audits_target_reason_and_actual_movement():
+    world = World(width=12, height=8, food_count=0, obstacle_count=0, rng=random.Random(38))
+    first = Agent(2, 2, sociability=0.9)
+    second = Agent(8, 2, sociability=0.9)
+    simulation = Simulation(world, agents=[first, second], seed_spawn_count=0)
+
+    simulation.step()
+
+    rows = [row for row in simulation.social_decision_history if row["agent_id"] == "H001"]
+    assert len(rows) == 1
+    assert "decision" in rows[0]
+    assert "reason" in rows[0]
+    assert "moved" in rows[0]
+    assert "target_agent_id" in rows[0]
+    assert rows[0]["step"] == 1
+
+
+def test_social_behavior_config_rejects_invalid_memory_settings():
+    from configuration.social_behavior_config import SocialBehaviorConfig
+
+    with pytest.raises(ValueError):
+        SocialBehaviorConfig(memory_ttl_steps=0).validate()
+    with pytest.raises(ValueError):
+        SocialBehaviorConfig(reunion_affinity_threshold=1.1).validate()

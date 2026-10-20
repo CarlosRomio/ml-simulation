@@ -11,6 +11,7 @@ Além do resumo de console, grava CSVs auditáveis em results/ecosystem_experime
 from __future__ import annotations
 
 import csv
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 from statistics import mean
@@ -223,6 +224,7 @@ def main() -> None:
     ecology_rows = []
     social_rows = []
     social_agent_rows = []
+    social_decision_rows = []
     for run_index, result in enumerate(results, start=1):
         for agent_index, metrics in enumerate(result.all_agent_metrics, start=1):
             metric_data = asdict(metrics)
@@ -265,6 +267,8 @@ def main() -> None:
             social_rows.append({"run": run_index, "seed": base_seed + run_index - 1, **record})
         for record in result.social_agent_history:
             social_agent_rows.append({"run": run_index, "seed": base_seed + run_index - 1, **record})
+        for record in result.social_decision_history:
+            social_decision_rows.append({"run": run_index, "seed": base_seed + run_index - 1, **record})
         for agent_index, history in enumerate(result.human_physiology_history, start=1):
             for record in history:
                 physiology_rows.append({
@@ -289,6 +293,7 @@ def main() -> None:
     _write_csv(OUTPUT_DIR / "ecology_history.csv", ecology_rows)
     _write_csv(OUTPUT_DIR / "social_history.csv", social_rows)
     _write_csv(OUTPUT_DIR / "social_agents_history.csv", social_agent_rows)
+    _write_csv(OUTPUT_DIR / "social_decisions_history.csv", social_decision_rows)
     # Uma linha final por par, útil para consultar afinidade acumulada sem
     # precisar filtrar manualmente a série temporal completa.
     final_relationships = {}
@@ -304,6 +309,12 @@ def main() -> None:
     print("  ecology_history.csv — estoques, coleta de materiais, transições, água e regeneração por passo")
     print("  social_history.csv — distância e evolução da afinidade de cada par por passo")
     print("  social_agents_history.csv — estado social individual por passo, com IDs estáveis")
+    print("  social_decisions_history.csv — decisão social por agente/passo, alvo, afinidade, motivo e movimento realizado")
+    decision_counts = Counter(str(row.get("decision", "")) for row in social_decision_rows)
+    if decision_counts:
+        print("Resumo das decisões sociais:")
+        for decision, count in sorted(decision_counts.items()):
+            print(f"  {decision}: {count}")
     print("  social_relationships_final.csv — último estado conhecido de cada relação")
 
 
