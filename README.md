@@ -1,4 +1,7 @@
-# ML Simulation — auditoria fisiológica e ecológica
+# ML Simulation
+
+> **Tempo simulado:** cada passo equivale a um minuto do mundo. Consulte `docs/TEMPORAL_PHYSIOLOGY_STAGE1.md` e `docs/PHYSIOLOGY_STAGE2.md` para a convenção temporal, sono, corrida, estamina e resultados de calibração.
+ — auditoria fisiológica e ecológica
 
 Projeto de simulação em grade para estudar sobrevivência de humanos e interações com herbívoros e carnívoros. A arquitetura está migrando gradualmente de prioridades rígidas para decisões avaliadas. A simulação ainda não treina um modelo de ML nem atualiza recompensas automaticamente; consulte `docs/AGENT_COGNITION.md` para o estado exato desta etapa.
 
@@ -7,7 +10,18 @@ Projeto de simulação em grade para estudar sobrevivência de humanos e intera�
 ```powershell
 py -3.13 -m pytest -q
 py -3.13 run_ecosystem_experiment.py
+py -3.13 run_physiology_experiment.py
 ```
+
+## Calibração de sono, corrida e metabolismo
+
+Para executar o lote de calibração fisiológica (8 sementes, 900 passos/15 horas simuladas por execução):
+
+```powershell
+py -3.13 run_physiology_experiment.py
+```
+
+O experimento gera `results/physiology_calibration/runs.csv`, `activity_history.csv` e `activity_summary.csv`. O histórico inclui atividades, decisões humanas, distância percorrida, estamina gasta em movimento e combate, recuperação efetiva, custos metabólicos brutos, fadiga, fome, sede, saúde e interrupções do sono. Consulte `docs/PHYSIOLOGY_STAGE2.md` para interpretar os parâmetros e os resultados iniciais.
 
 ## Comparação controlada do comportamento social
 

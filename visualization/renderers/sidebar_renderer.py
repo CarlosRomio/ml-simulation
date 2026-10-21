@@ -145,6 +145,7 @@ class SidebarRenderer:
         rows.extend([
             ("section", "MUNDO"),
             ("row", "Passos", str(simulation.steps)),
+            ("row", "Tempo simulado", simulation.simulated_time_label),
             ("row", "Humanos vivos", f"{alive_humans}/{len(simulation.agents)}"),
             ("row", "Herbívoros vivos", f"{alive_herbivores}/{len(simulation.herbivores)}", (126, 210, 112)),
             ("row", "Carnívoros vivos", f"{alive_carnivores}/{len(simulation.carnivores)}", (220, 120, 105)),
@@ -184,6 +185,7 @@ class SidebarRenderer:
             ("row", "Persistência", f"{agent.personality.persistence:.2f}"),
             ("row", "Sensib. recompensa", f"{agent.personality.reward_sensitivity:.2f}"),
             ("section", "DECISÃO"),
+            ("row", "Atividade", str(agent.last_activity)),
             ("row", "Intenção atual", str(agent.last_behavior_intent)),
             ("row", "Última ação avaliada", str(
                 decision_trace.get("intent", "prioridade comportamental")
@@ -200,6 +202,8 @@ class SidebarRenderer:
             ("bar", "Saúde", agent.health, agent.needs.max_health,
              (225, 100, 85) if agent.health <= agent.needs.max_health * 0.3 else (105, 200, 125)),
             ("bar", "Estamina", agent.energy, agent.max_energy, ENERGY_COLOR),
+            ("bar", "Fadiga", agent.needs.fatigue, agent.needs.max_fatigue,
+             (225, 100, 85) if agent.needs.fatigue >= 75 else (175, 150, 215)),
             ("bar", "Fome", agent.hunger, agent.needs.max_hunger,
              (225, 100, 85) if agent.hunger >= agent.needs.starvation_threshold else (220, 170, 80)),
             ("bar", "Sede", agent.thirst, agent.needs.max_thirst,

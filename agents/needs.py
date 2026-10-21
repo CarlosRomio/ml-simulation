@@ -24,6 +24,8 @@ class AgentNeeds:
     thirst: float = 20.0
     hunger_per_step: float = 0.25
     thirst_per_step: float = 0.2
+    max_fatigue: float = 100.0
+    fatigue: float = 0.0
     starvation_threshold: float = 90.0
     dehydration_threshold: float = 90.0
     damage_per_step: float = 1.0
@@ -34,7 +36,7 @@ class AgentNeeds:
     damage_by_cause: dict[str, float] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
-        positive_names = ("max_health", "max_energy", "max_hunger", "max_thirst")
+        positive_names = ("max_health", "max_energy", "max_hunger", "max_thirst", "max_fatigue")
         for name in positive_names:
             value = getattr(self, name)
             if not isfinite(value) or value <= 0:
@@ -56,6 +58,7 @@ class AgentNeeds:
         for value_name, max_name in (
             ("health", "max_health"), ("energy", "max_energy"),
             ("hunger", "max_hunger"), ("thirst", "max_thirst"),
+            ("fatigue", "max_fatigue"),
         ):
             value = getattr(self, value_name)
             if not isfinite(value) or not 0 <= value <= getattr(self, max_name):
@@ -69,12 +72,21 @@ class AgentNeeds:
     def alive(self) -> bool:
         return self.health > 0
 
-    def advance_step(self) -> None:
-        """Avança fome/sede e aplica dano crítico uma vez por passo."""
+    def advance_step(
+        self, *, hunger_extra: float = 0.0, thirst_extra: float = 0.0, fatigue_delta: float = 0.0
+    ) -> None:
+        """Avança necessidades um minuto e aplica dano crítico uma vez por passo."""
+        if not isfinite(hunger_extra) or hunger_extra < 0:
+            raise ValueError("O custo metabólico adicional deve ser finito e não negativo.")
+        if not isfinite(thirst_extra) or thirst_extra < 0:
+            raise ValueError("O custo adicional de sede deve ser finito e não negativo.")
+        if not isfinite(fatigue_delta):
+            raise ValueError("A variação de fadiga deve ser finita.")
         self.last_damage_cause = None
         causes: list[str] = []
-        self.hunger = min(self.max_hunger, self.hunger + self.hunger_per_step)
-        self.thirst = min(self.max_thirst, self.thirst + self.thirst_per_step)
+        self.hunger = min(self.max_hunger, self.hunger + self.hunger_per_step + hunger_extra)
+        self.fatigue = max(0.0, min(self.max_fatigue, self.fatigue + fatigue_delta))
+        self.thirst = min(self.max_thirst, self.thirst + self.thirst_per_step + thirst_extra)
 
         if self.hunger >= self.starvation_threshold:
             amount = self.damage_per_step if self.starvation_damage_per_step is None else self.starvation_damage_per_step

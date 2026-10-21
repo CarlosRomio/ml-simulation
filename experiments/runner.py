@@ -29,6 +29,7 @@ class SimulationRunResult:
     population_history: list[dict[str, int | float]] = field(default_factory=list)
     ecology_history: list[dict[str, int | float]] = field(default_factory=list)
     human_physiology_history: list[list[dict]] = field(default_factory=list)
+    physiology_activity_history: list[dict[str, object]] = field(default_factory=list)
     agent_ids: list[str] = field(default_factory=list)
     social_history: list[dict[str, object]] = field(default_factory=list)
     social_agent_history: list[dict[str, object]] = field(default_factory=list)
@@ -202,6 +203,7 @@ def run_single_simulation(
         social_history=list(simulation.social_history),
         social_agent_history=list(simulation.social_agent_history),
         social_decision_history=list(simulation.social_decision_history),
+        physiology_activity_history=list(simulation.physiology_activity_history),
         human_physiology_history=[
             [{
                 "step": 0,

@@ -49,6 +49,12 @@ class Agent:
         self.species = Species(species)
         self.hunt_target: Position | None = None
         self.running = False
+        self.last_activity = "WAITING"
+        self.is_sleeping = False
+        self._sleep_selected = False
+        self.sleep_started_step: int | None = None
+        self.last_sleep_interruption_reason = ""
+        self._sleep_interruption_event = ""
 
         self.target: Position | None = None
         self.path: list[Position] = []
@@ -87,6 +93,7 @@ class Agent:
         self._decision_outcome_recorded = False
         self._current_decision_reward_eligible = False
         self._rest_selected = False
+        self._waiting_selected = False
         self._selected_movement: Position | None = None
         self._decision_tick = 0
         # Posições de humanos vivos dentro do alcance social percebido neste passo.
@@ -130,6 +137,10 @@ class Agent:
     @property
     def health(self) -> float:
         return self.needs.health
+
+    @property
+    def fatigue(self) -> float:
+        return self.needs.fatigue
 
     @property
     def hunger(self) -> float:
@@ -547,6 +558,7 @@ class Agent:
         current_cell = world.get_cell(*current_position)
         in_shelter = isinstance(current_cell.structure, Shelter)
         energy_need = 1.0 - self.energy / max(1.0, self.max_energy)
+        fatigue_need = self.needs.fatigue / max(1.0, self.needs.max_fatigue)
         rest_threshold = 70.0 if in_shelter else 55.0
         if (
             self.energy < rest_threshold
@@ -565,6 +577,41 @@ class Agent:
                 metadata={"in_shelter": in_shelter},
             ))
 
+        # Sono é uma ação persistente, distinta de descanso. Necessidades urgentes
+        # impedem iniciar o sono; necessidades moderadas ainda podem ser atendidas
+        # durante o sono quando há alimento no inventário.
+        sleep_threshold = getattr(getattr(self, "physiology_config", None), "sleep_start_threshold", 65.0)
+        can_sleep = (
+            not getattr(self, "_sleep_blocked_this_step", False)
+            and self.needs.fatigue >= sleep_threshold
+            and self.thirst < 40.0
+            and (self.hunger < 35.0 or self.inventory.food_quantity >= 1.0)
+        )
+        if can_sleep:
+            candidates.append(ActionCandidate(
+                action_id="SLEEP", intent="SLEEP",
+                expected_benefit=min(1.0, 0.55 + 0.45 * fatigue_need),
+                urgency=min(1.0, fatigue_need * 1.25),
+                opportunity=0.85 if in_shelter else 0.45,
+                cost=0.0 if in_shelter else 0.12,
+                risk=0.05 if in_shelter else 0.25,
+                continues_current_goal=self.last_behavior_intent == "SLEEP",
+                target=current_position,
+                metadata={"in_shelter": in_shelter},
+            ))
+
+        # Esperar é uma ação explícita: não desloca o agente e não equivale a
+        # descansar. É útil quando nenhuma alternativa imediata compensa o custo.
+        candidates.append(ActionCandidate(
+            action_id="WAIT", intent="WAIT",
+            expected_benefit=0.02 + 0.45 * fatigue_need,
+            urgency=0.30 * fatigue_need,
+            opportunity=0.05 + 0.30 * fatigue_need,
+            cost=0.0, risk=0.0,
+            continues_current_goal=self.last_behavior_intent == "WAIT",
+            target=current_position,
+        ))
+
         # Exploração é uma alternativa real, mas não deve automaticamente
         # superar uma necessidade importante só por haver uma célula inédita.
         possible_moves = ((0, -1), (0, 1), (-1, 0), (1, 0))
@@ -579,7 +626,7 @@ class Agent:
                 intent="EXPLORATION",
                 expected_benefit=0.15 + 0.25 * novelty,
                 opportunity=0.50 * novelty,
-                cost=0.08,
+                cost=min(1.0, 0.08 + 0.35 * fatigue_need),
                 exploration_value=novelty,
                 continues_current_goal=self.target_intent == "EXPLORATION",
                 target=target,
@@ -603,9 +650,26 @@ class Agent:
 
         self.last_decision_trace = self.decision_engine.trace(chosen, evaluated)
         self.last_decision_action_id = chosen.candidate.action_id
+        self._waiting_selected = False
         self._current_decision_reward_eligible = True
         self._decision_outcome_recorded = False
         action = chosen.candidate
+
+        if action.action_id == "SLEEP":
+            self._clear_target()
+            self.target_intent = "SLEEP"
+            self.last_behavior_intent = "SLEEP"
+            self.is_sleeping = True
+            self.last_sleep_interruption_reason = ""
+            self._sleep_selected = True
+            return
+
+        if action.action_id == "WAIT":
+            self._clear_target()
+            self.target_intent = "WAIT"
+            self.last_behavior_intent = "WAIT"
+            self._waiting_selected = True
+            return
 
         if action.action_id == "REST":
             self._clear_target()
@@ -616,10 +680,12 @@ class Agent:
 
         self.target = action.target
         self.path = list(action.metadata.get("path", []))
+        self._waiting_selected = False
         if action.action_id == "EXPLORE":
             # Exploração é uma ação direta de um passo, sem criar um alvo
             # persistente que possa ser confundido com uma rota para recurso.
             self._clear_target()
+            self._waiting_selected = False
             self._selected_movement = action.metadata["movement"]
             self.last_behavior_intent = action.intent
             return
@@ -635,6 +701,8 @@ class Agent:
         self._record_position()
         self._decision_tick += 1
         self._rest_selected = False
+        self._sleep_selected = False
+        self._waiting_selected = True
         self._selected_movement = None
         # Mantém a última decisão cognitiva visível para auditoria, mas só
         # permite atribuir recompensa se o seletor voltar a escolher neste passo.
@@ -645,6 +713,12 @@ class Agent:
             self.target is not None
             and self.target_intent in {"SEEK_FOOD", "SEEK_WATER"}
             and self._decision_tick % 5 == 0
+        ):
+            self._clear_target()
+        if (
+            self.needs.fatigue >= getattr(getattr(self, "physiology_config", None), "sleep_start_threshold", 65.0)
+            and self.hunger < 50.0 and self.thirst < 50.0
+            and self.target is not None and self.target_intent == "EXPLORATION"
         ):
             self._clear_target()
         self.last_social_decision = {
@@ -690,6 +764,25 @@ class Agent:
                 self.last_behavior_intent = "INTERACT_STORAGE"
                 return (0, 0)
 
+        # A fadiga elevada inicia sono persistente, desde que não haja uma
+        # necessidade alimentar/hídrica que deva ser resolvida primeiro.
+        physiology = getattr(self, "physiology_config", None)
+        sleep_threshold = getattr(physiology, "sleep_start_threshold", 65.0)
+        if (
+            not getattr(self, "_sleep_blocked_this_step", False)
+            and self.needs.fatigue >= sleep_threshold
+            and self.thirst < 40.0
+            and (self.hunger < 35.0 or self.inventory.food_quantity >= 1.0)
+        ):
+            self._clear_target()
+            self.is_sleeping = True
+            self.last_sleep_interruption_reason = ""
+            self._sleep_selected = True
+            self._waiting_selected = False
+            self.target_intent = "SLEEP"
+            self.last_behavior_intent = "SLEEP"
+            return (0, 0)
+
         # O agente chegou ao destino.
         if self.target == current_position:
             self._clear_target()
@@ -708,6 +801,8 @@ class Agent:
                 pathfinder,
             )
             if self._rest_selected:
+                return (0, 0)
+            if self.target_intent == "WAIT":
                 return (0, 0)
             if self._selected_movement is not None:
                 return self._selected_movement
@@ -733,6 +828,7 @@ class Agent:
         # Executa o próximo movimento da rota.
         if self.path:
             next_x, next_y = self.path[0]
+            self._waiting_selected = False
 
             return (
                 next_x - self.x,
@@ -806,6 +902,7 @@ class Agent:
             return (0, 0)
         self.last_decision_trace = self.decision_engine.trace(chosen, evaluated)
         self.last_decision_action_id = chosen.candidate.action_id
+        self._waiting_selected = False
         self._current_decision_reward_eligible = True
         self._decision_outcome_recorded = False
         return chosen.candidate.metadata["movement"]

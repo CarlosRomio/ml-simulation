@@ -31,9 +31,9 @@ def test_herbivore_factory_creates_separate_entities_and_avoids_humans():
 
 
 def test_herbivore_consumes_mature_plant_and_restores_hunger():
-    world = World(width=3, height=3, food_count=0, obstacle_count=0)
-    world.get_cell(2, 1).resource = Plant(state=PlantState.MATURE)
-    animal = Herbivore(x=1, y=1, rng=random.Random(1))
+    world = World(width=10, height=10, food_count=0, obstacle_count=0)
+    world.get_cell(6, 5).resource = Plant(state=PlantState.MATURE)
+    animal = Herbivore(x=5, y=5, rng=random.Random(1))
     animal.needs.hunger = 60
     simulation = Simulation(world, agents=[Agent(x=0,y=0)], herbivores=[animal], seed_spawn_count=0)
     simulation.step()

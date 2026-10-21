@@ -95,3 +95,20 @@ def test_simulation_records_first_dehydration_damage_and_death_cause():
     assert metrics.critical_thirst_steps == 1
     assert metrics.dehydration_damage_steps == 1
     assert metrics.first_dehydration_damage_step == 1
+
+
+def test_fatigue_is_clamped_and_activity_costs_are_applied_per_step():
+    needs = AgentNeeds(fatigue=10.0, hunger=20.0, hunger_per_step=0.25)
+    needs.advance_step(hunger_extra=0.05, fatigue_delta=0.45)
+    assert needs.fatigue == 10.45
+    assert needs.hunger == 20.3
+
+    needs.fatigue = 99.9
+    needs.advance_step(fatigue_delta=0.45)
+    assert needs.fatigue == 100.0
+
+
+def test_fatigue_can_decrease_without_going_below_zero():
+    needs = AgentNeeds(fatigue=1.0)
+    needs.advance_step(fatigue_delta=-2.0)
+    assert needs.fatigue == 0.0

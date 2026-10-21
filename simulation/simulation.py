@@ -15,11 +15,12 @@ from environment.storage import Storage
 from environment.shelter import Shelter
 from metrics.tracker import SimulationMetrics
 from configuration.social_behavior_config import SocialBehaviorConfig
+from configuration.physiology_config import DEFAULT_PHYSIOLOGY_CONFIG, PhysiologyConfig
 
 
 FOOD_ENERGY = 35.0
 ENERGY_PER_STEP = 1.0  # custo de estamina por célula percorrida
-RUN_STAMINA_COST = 4.0
+RUN_STAMINA_COST = 8.0
 ATTACK_STAMINA_COST = 8.0
 ATTACK_DAMAGE = 30.0
 CARNIVORE_ATTACK_DAMAGE = 35.0
@@ -108,6 +109,7 @@ class Simulation:
         social_config: SocialBehaviorConfig | None = None,
         social_behavior_enabled: bool = True,
         social_memory_enabled: bool = True,
+        physiology_config: PhysiologyConfig | None = None,
     ):
         if step_duration_seconds <= 0:
             raise ValueError("A duração do passo deve ser positiva.")
@@ -179,8 +181,13 @@ class Simulation:
         # Controle manual opcional para validação interativa na visualização.
         self.manual_control_agent: Agent | None = None
         self.manual_action: tuple[int, int] = (0, 0)
+        self.manual_running = False
         self.steps = 0
-        self.step_duration_seconds = step_duration_seconds
+        self.step_duration_seconds = step_duration_seconds  # parâmetro legado; não altera o relógio simulado
+        self.physiology_config = physiology_config or DEFAULT_PHYSIOLOGY_CONFIG
+        self.physiology_config.validate()
+        for individual in self.agents + self.herbivores + self.carnivores:
+            individual.physiology_config = self.physiology_config
         self.seed_spawn_count = seed_spawn_count
         self.max_plants = max_plants
         self.resource_update_interval = resource_update_interval
@@ -204,6 +211,8 @@ class Simulation:
         self.population_history: list[dict[str, int | float]] = []
         # Auditoria social em resolução por passo e por par de indivíduos.
         self.social_history: list[dict[str, object]] = []
+        # Auditoria fisiológica unificada: humanos e animais, uma linha por indivíduo/passo.
+        self.physiology_activity_history: list[dict[str, object]] = []
         self.social_agent_history: list[dict[str, object]] = []
         self.social_decision_history: list[dict[str, object]] = []
         self.social_pair_affinity: dict[tuple[str, str], float] = {}
@@ -270,22 +279,41 @@ class Simulation:
         if enabled:
             self.manual_control_agent = agent
             self.manual_action = (0, 0)
+            self.manual_running = False
+            if agent.is_sleeping:
+                agent.is_sleeping = False
+                agent.last_sleep_interruption_reason = "MANUAL_CONTROL"
             agent.target = None
             agent.path.clear()
             agent.building_intent = False
         elif self.manual_control_agent is agent:
             self.manual_control_agent = None
             self.manual_action = (0, 0)
+            self.manual_running = False
         return True
 
-    def queue_manual_action(self, dx: int, dy: int) -> bool:
+    def queue_manual_action(self, dx: int, dy: int, *, run: bool = False) -> bool:
         """Agenda um movimento cardinal para o próximo passo da simulação."""
         if self.manual_control_agent is None or not self.manual_control_agent.alive:
             return False
         if (dx, dy) not in {(0, 0), (0, -1), (0, 1), (-1, 0), (1, 0)}:
             raise ValueError("O movimento manual deve ser uma direção cardinal.")
         self.manual_action = (dx, dy)
+        self.manual_running = bool(run and (dx, dy) != (0, 0))
         return True
+
+    @property
+    def simulated_minutes(self) -> int:
+        """Tempo decorrido no mundo; independe da velocidade real de execução."""
+        return self.steps * self.physiology_config.minutes_per_step
+
+    @property
+    def simulated_time_label(self) -> str:
+        total_minutes = self.simulated_minutes
+        day_number = total_minutes // 1440 + 1
+        hour = (total_minutes % 1440) // 60
+        minute = total_minutes % 60
+        return f"Dia {day_number}, {hour:02d}:{minute:02d}"
 
     @property
     def alive_agents(self) -> list[Agent]:
@@ -540,6 +568,9 @@ class Simulation:
             "human_mean_hunger": self._mean_need(self.alive_agents, "hunger"),
             "human_mean_thirst": self._mean_need(self.alive_agents, "thirst"),
             "human_mean_energy": self._mean_need(self.alive_agents, "energy"),
+            "human_mean_fatigue": self._mean_need(self.alive_agents, "fatigue"),
+            "human_sleeping": sum(agent.is_sleeping for agent in self.alive_agents),
+            "human_running": sum(agent.last_activity == "RUNNING" for agent in self.alive_agents),
             "human_all_mean_health": self._mean_need(self.agents, "health"),
             "human_all_mean_hunger": self._mean_need(self.agents, "hunger"),
             "human_all_mean_thirst": self._mean_need(self.agents, "thirst"),
@@ -547,12 +578,20 @@ class Simulation:
             "herbivore_mean_health": self._mean_need(self.alive_herbivores, "health"),
             "herbivore_mean_hunger": self._mean_need(self.alive_herbivores, "hunger"),
             "herbivore_mean_thirst": self._mean_need(self.alive_herbivores, "thirst"),
+            "herbivore_mean_energy": self._mean_need(self.alive_herbivores, "energy"),
+            "herbivore_mean_fatigue": self._mean_need(self.alive_herbivores, "fatigue"),
+            "herbivore_sleeping": sum(animal.is_sleeping for animal in self.alive_herbivores),
+            "herbivore_running": sum(animal.last_activity == "RUNNING" for animal in self.alive_herbivores),
             "herbivore_all_mean_health": self._mean_need(self.herbivores, "health"),
             "herbivore_all_mean_hunger": self._mean_need(self.herbivores, "hunger"),
             "herbivore_all_mean_thirst": self._mean_need(self.herbivores, "thirst"),
             "carnivore_mean_health": self._mean_need(self.alive_carnivores, "health"),
             "carnivore_mean_hunger": self._mean_need(self.alive_carnivores, "hunger"),
             "carnivore_mean_thirst": self._mean_need(self.alive_carnivores, "thirst"),
+            "carnivore_mean_energy": self._mean_need(self.alive_carnivores, "energy"),
+            "carnivore_mean_fatigue": self._mean_need(self.alive_carnivores, "fatigue"),
+            "carnivore_sleeping": sum(animal.is_sleeping for animal in self.alive_carnivores),
+            "carnivore_running": sum(animal.last_activity == "RUNNING" for animal in self.alive_carnivores),
             "carnivore_all_mean_health": self._mean_need(self.carnivores, "health"),
             "carnivore_all_mean_hunger": self._mean_need(self.carnivores, "hunger"),
             "carnivore_all_mean_thirst": self._mean_need(self.carnivores, "thirst"),
@@ -589,7 +628,7 @@ class Simulation:
         self._record_population_metrics()
         for metrics in self.metrics_by_agent.values():
             metrics.steps = self.steps
-            metrics.simulated_time_seconds = self.steps * self.step_duration_seconds
+            metrics.simulated_time_seconds = self.simulated_minutes * 60.0
 
     def _resolve_movements(self, actions: dict[int, tuple[int, int]]) -> dict[int, bool]:
         """Resolve one intended move per agent without shared destination cells.
@@ -636,7 +675,7 @@ class Simulation:
                 continue
 
             moved = False
-            distance = 2 if agent.running and agent.energy >= RUN_STAMINA_COST else 1
+            distance = 2 if agent.running and agent.energy >= self.physiology_config.stamina_run_cost else 1
             for _ in range(distance):
                 next_position = (agent.x + dx, agent.y + dy)
                 if next_position in occupied or next_position in animal_positions or not self.world.is_walkable(*next_position):
@@ -658,6 +697,25 @@ class Simulation:
                 agent.path.clear()
 
         return moved_by_id
+
+    def _sleep_wake_reason(self, individual) -> str:
+        """Retorna o motivo de interromper o sono por necessidade ou ameaça."""
+        config = self.physiology_config
+        if individual.hunger >= config.sleep_wake_hunger_threshold:
+            return "HUNGER"
+        if individual.hunger >= 35.0 and getattr(individual, "inventory", None) is not None and individual.inventory.food_quantity < 1.0:
+            return "HUNGER"
+        if individual.hunger >= 35.0 and not hasattr(individual, "inventory"):
+            return "HUNGER"
+        if individual.thirst >= min(40.0, config.sleep_wake_thirst_threshold):
+            return "THIRST"
+        radius = config.sleep_wake_predator_radius
+        for predator in self.alive_carnivores:
+            if predator is individual:
+                continue
+            if abs(predator.x - individual.x) + abs(predator.y - individual.y) <= radius:
+                return "PREDATOR_NEARBY"
+        return ""
 
     def _has_nearby_shelter(self, position: tuple[int, int], radius: int = 8) -> bool:
         x, y = position
@@ -704,7 +762,7 @@ class Simulation:
         before = {id(a): (a.x, a.y) for a in alive_at_start}
         energy_before = {id(a): a.energy for a in alive_at_start}
         physiology_before = {
-            id(a): {"health": a.health, "hunger": a.hunger, "thirst": a.thirst, "energy": a.energy}
+            id(a): {"health": a.health, "hunger": a.hunger, "thirst": a.thirst, "energy": a.energy, "fatigue": a.needs.fatigue}
             for a in alive_at_start
         }
         damage_before = {id(a): dict(a.needs.damage_by_cause) for a in alive_at_start}
@@ -715,7 +773,28 @@ class Simulation:
         # O humano sob controle manual ignora a decisão autônoma neste passo,
         # mas continua sujeito a colisões, necessidades e interações normais.
         for agent in alive_at_start:
+            agent._sleep_blocked_this_step = False
+            agent._sleep_interruption_event = ""
+            if agent.is_sleeping:
+                wake_reason = self._sleep_wake_reason(agent)
+                if wake_reason:
+                    agent.is_sleeping = False
+                    agent.last_sleep_interruption_reason = wake_reason
+                    agent._sleep_interruption_event = wake_reason
+                    agent._sleep_blocked_this_step = True
+                else:
+                    agent._rest_selected = False
+                    agent._sleep_selected = True
+                    agent._waiting_selected = False
+                    agent.running = False
+                    agent.last_behavior_intent = "SLEEP"
+                    actions[id(agent)] = (0, 0)
+                    continue
             if agent is self.manual_control_agent:
+                agent._rest_selected = False
+                agent._sleep_selected = False
+                agent._waiting_selected = self.manual_action == (0, 0)
+                agent.running = bool(self.manual_running and agent.energy >= self.physiology_config.stamina_run_minimum)
                 agent.last_social_decision = {
                     "decision": "MANUAL_CONTROL", "reason": "AUTONOMOUS_DECISION_BYPASSED",
                     "target_agent_id": "", "target_affinity": 0.0,
@@ -751,7 +830,8 @@ class Simulation:
             if should_hunt and visible_animals:
                 prey = min(visible_animals, key=lambda h: abs(h.x-agent.x)+abs(h.y-agent.y))
                 agent.hunt_target = (prey.x, prey.y)
-                agent.running = abs(prey.x-agent.x)+abs(prey.y-agent.y) > 1 and agent.energy >= RUN_STAMINA_COST
+                agent.running = (abs(prey.x-agent.x)+abs(prey.y-agent.y) > 1
+                    and agent.energy >= self.physiology_config.stamina_run_minimum)
             else:
                 agent.hunt_target = None
                 agent.running = False
@@ -809,10 +889,24 @@ class Simulation:
                 agent.social_known_contacts.clear()
                 agent.social_candidate_contacts = []
             actions[id(agent)] = agent.choose_action(nearby, self.world)
+            if not agent.is_sleeping and agent.energy >= self.physiology_config.stamina_run_minimum:
+                if agent.target is not None:
+                    target_distance = abs(agent.target[0] - agent.x) + abs(agent.target[1] - agent.y)
+                else:
+                    target_distance = 0
+                urgent_target = (
+                    agent.target_intent == "HUNT"
+                    or (agent.target_intent == "SEEK_WATER" and agent.thirst >= 55.0)
+                    or (agent.target_intent == "SEEK_FOOD" and agent.hunger >= 60.0)
+                )
+                agent.running = bool(urgent_target and target_distance >= 3)
+            else:
+                agent.running = False
 
         # Cada tecla corresponde a um único passo, evitando movimento contínuo
         # involuntário quando a simulação está em velocidade acelerada.
         self.manual_action = (0, 0)
+        self.manual_running = False
         moved_by_id = self._resolve_movements(actions)
         for agent in alive_at_start:
             self._record_social_decision(
@@ -919,20 +1013,59 @@ class Simulation:
             )
             if agent.running and moved:
                 energy_before_cost = agent.energy
-                agent.consume_energy(RUN_STAMINA_COST)
+                agent.consume_energy(self.physiology_config.stamina_run_cost)
                 movement_energy_cost = energy_before_cost - agent.energy
             elif moved:
                 energy_before_cost = agent.energy
                 agent.consume_energy(ENERGY_PER_STEP * displacement)
                 movement_energy_cost = energy_before_cost - agent.energy
-            else:
+            elif not agent._sleep_selected and (agent._rest_selected or (not agent._waiting_selected and actions.get(key, (0, 0)) == (0, 0))):
                 energy_before_rest = agent.energy
                 current_structure = self.world.get_cell(agent.x, agent.y).structure
-                rest_amount = 8.0 if isinstance(current_structure, Shelter) else 2.0
+                rest_amount = (
+                    self.physiology_config.stamina_shelter_rest_recovery
+                    if isinstance(current_structure, Shelter)
+                    else self.physiology_config.stamina_rest_recovery
+                )
                 agent.rest(rest_amount)
                 rest_energy_recovered = agent.energy - energy_before_rest
+
+            if agent.is_sleeping or agent._sleep_selected:
+                activity = "SLEEPING"
+                agent.is_sleeping = True
+            elif moved:
+                activity = "RUNNING" if agent.running else "WALKING"
+            elif agent._rest_selected or (not agent._waiting_selected and actions.get(key, (0, 0)) == (0, 0)):
+                activity = "RESTING"
+            else:
+                activity = "WAITING"
+            agent.last_activity = activity
+            activity_config = self.physiology_config
+            activity_costs = {
+                "WAITING": (activity_config.hunger_wait_cost, activity_config.thirst_wait_cost, activity_config.fatigue_wait_per_step),
+                "WALKING": (activity_config.hunger_walk_cost, activity_config.thirst_walk_cost, activity_config.fatigue_walk_per_step),
+                "RUNNING": (activity_config.hunger_run_cost, activity_config.thirst_run_cost, activity_config.fatigue_run_per_step),
+                "RESTING": (activity_config.hunger_rest_cost, activity_config.thirst_rest_cost, activity_config.fatigue_rest_per_step),
+                "SLEEPING": (activity_config.hunger_rest_cost, activity_config.thirst_rest_cost,
+                    - (activity_config.fatigue_shelter_sleep_recovery if isinstance(self.world.get_cell(agent.x, agent.y).structure, Shelter)
+                       else activity_config.fatigue_sleep_recovery)),
+            }
+            hunger_extra, thirst_extra, fatigue_delta = activity_costs[activity]
+            if activity == "WAITING":
+                energy_before_wait_recovery = agent.energy
+                agent.needs.restore_energy(activity_config.stamina_wait_recovery)
+                rest_energy_recovered = agent.energy - energy_before_wait_recovery
+            elif activity == "SLEEPING":
+                energy_before_sleep_recovery = agent.energy
+                agent.needs.restore_energy(activity_config.stamina_sleep_recovery)
+                rest_energy_recovered = agent.energy - energy_before_sleep_recovery
             health_before_needs = agent.health
-            agent.needs.advance_step()
+            agent.needs.advance_step(
+                hunger_extra=hunger_extra, thirst_extra=thirst_extra, fatigue_delta=fatigue_delta
+            )
+            if activity == "SLEEPING" and agent.needs.fatigue <= activity_config.sleep_end_threshold:
+                agent.is_sleeping = False
+                agent.last_behavior_intent = "AWAKE"
             health_after_physiology = agent.health
             if agent.hunger >= agent.needs.starvation_threshold:
                 metrics.critical_hunger_steps += 1
@@ -1001,11 +1134,39 @@ class Simulation:
                 "hunger_after_physiology": agent.hunger,
                 "thirst_before": physiology_before[key]["thirst"],
                 "thirst_after_physiology": agent.thirst,
+                "fatigue_before": physiology_before[key]["fatigue"],
+                "fatigue_after_physiology": agent.needs.fatigue,
+                "activity": activity,
+                "simulated_minute": self.simulated_minutes + 1,
                 "movement_energy_cost": movement_energy_cost,
                 "food_energy_recovered": food_energy_recovered,
                 "rest_energy_recovered": rest_energy_recovered,
                 "energy_after_actions": agent.energy,
                 "damage_causes": list(agent.needs.last_damage_causes),
+            })
+            self.physiology_activity_history.append({
+                "step": self.steps + 1, "simulated_minute": self.simulated_minutes + 1,
+                "individual_type": "HUMAN", "individual_id": agent.agent_id or f"H{id(agent)}",
+                "x": agent.x, "y": agent.y, "activity": activity,
+                "behavior_intent": agent.last_behavior_intent,
+                "decision_action_id": (agent.last_decision_trace or {}).get("action_id", ""),
+                "decision_score": (agent.last_decision_trace or {}).get("score", ""),
+                "moved": bool(moved), "distance": float(displacement),
+                "stamina_before": energy_before[key], "stamina_after": agent.energy,
+                "stamina_spent_movement": movement_energy_cost,
+                "stamina_recovered_rest": rest_energy_recovered,
+                "stamina_spent_combat": 0.0,
+                "hunger_metabolic_cost": agent.needs.hunger_per_step + hunger_extra,
+                "thirst_metabolic_cost": agent.needs.thirst_per_step + thirst_extra,
+                "fatigue_delta": fatigue_delta,
+                "fatigue_before": physiology_before[key]["fatigue"], "fatigue_after": agent.needs.fatigue,
+                "hunger_before": physiology_before[key]["hunger"], "hunger_after": agent.hunger,
+                "thirst_before": physiology_before[key]["thirst"], "thirst_after": agent.thirst,
+                "health_before": physiology_before[key]["health"], "health_after": agent.health,
+                "damage_causes": ";".join(agent.needs.last_damage_causes),
+                "sleeping_after_step": agent.is_sleeping,
+                "sleep_interruption_reason": agent._sleep_interruption_event,
+                "termination_cause": "RUNNING" if agent.alive else (agent.needs.last_damage_cause or "HEALTH_DEPLETED"),
             })
             if not agent.alive:
                 causes = set(agent.needs.last_damage_causes)
@@ -1017,15 +1178,19 @@ class Simulation:
                 else:
                     metrics.termination_cause = agent.needs.last_damage_cause or "HEALTH_DEPLETED"
 
+        # Custos de combate são registrados separadamente dos custos de locomoção.
+        combat_stamina_spent: dict[int, float] = {}
         # Humanos atacam herbívoros adjacentes apenas quando estão caçando.
         for agent in self.alive_agents:
-            if agent.hunt_target is None or agent.energy < ATTACK_STAMINA_COST:
+            if agent.hunt_target is None or agent.energy < self.physiology_config.stamina_attack_cost:
                 continue
             prey = next((h for h in self.alive_herbivores
                          if abs(h.x-agent.x) + abs(h.y-agent.y) <= 1), None)
             if prey is None:
                 continue
-            agent.consume_energy(ATTACK_STAMINA_COST)
+            agent.consume_energy(self.physiology_config.stamina_attack_cost)
+            combat_stamina_spent[id(agent)] = combat_stamina_spent.get(id(agent), 0.0) + self.physiology_config.stamina_attack_cost
+            prey_health_before = prey.health
             prey.needs.damage(ATTACK_DAMAGE, cause="HUNTING")
             self.attacks += 1
             if not prey.needs.alive:
@@ -1033,64 +1198,274 @@ class Simulation:
                 agent.needs.eat(MEAT_HUNGER_REDUCTION)
                 agent.needs.restore_energy(MEAT_STAMINA_REWARD)
                 self.animals_killed += 1
+                prey_id = f"V{self.herbivores.index(prey)+1:03d}"
+                self.physiology_activity_history.append({
+                    "step": self.steps + 1, "simulated_minute": self.simulated_minutes + 1,
+                    "individual_type": "HERBIVORE", "individual_id": prey_id,
+                    "x": prey.x, "y": prey.y, "activity": "DEAD",
+                    "behavior_intent": "KILLED_BY_HUNTING", "decision_action_id": "", "decision_score": "",
+                    "moved": False, "distance": 0.0,
+                    "stamina_before": prey.needs.energy, "stamina_after": prey.needs.energy,
+                    "stamina_spent_movement": 0.0, "stamina_recovered_rest": 0.0,
+                    "stamina_spent_combat": 0.0, "hunger_metabolic_cost": 0.0,
+                    "thirst_metabolic_cost": 0.0, "fatigue_delta": 0.0,
+                    "fatigue_before": prey.needs.fatigue, "fatigue_after": prey.needs.fatigue,
+                    "hunger_before": prey.hunger, "hunger_after": prey.hunger,
+                    "thirst_before": prey.thirst, "thirst_after": prey.thirst,
+                    "health_before": prey_health_before, "health_after": prey.health,
+                    "damage_causes": "HUNTING", "sleeping_after_step": False,
+                    "sleep_interruption_reason": "", "termination_cause": "HUNTING",
+                })
 
-        # Animais agem como entidades independentes e não entram em células ocupadas.
+        # Animais agem como entidades independentes, com fisiologia e corrida próprias.
         occupied_agents = {(a.x, a.y) for a in self.alive_agents}
         occupied_animals = {(h.x, h.y) for h in self.alive_herbivores}
         for animal in list(self.alive_herbivores):
+            animal._sleep_interruption_event = ""
             before_pos = (animal.x, animal.y)
+            before_state = {
+                "health": animal.health, "hunger": animal.hunger,
+                "thirst": animal.thirst, "stamina": animal.needs.energy,
+                "fatigue": animal.needs.fatigue,
+            }
             threat_positions = list(occupied_agents) + [
                 (c.x, c.y) for c in self.alive_carnivores
             ]
-            action = animal.choose_action(self.world, threat_positions)
-            nx, ny = animal.x + action[0], animal.y + action[1]
-            if action != (0, 0) and (nx, ny) not in occupied_agents and (nx, ny) not in (occupied_animals - {before_pos}) and self.world.move_agent(animal, action):
-                occupied_animals.discard(before_pos)
-                occupied_animals.add((animal.x, animal.y))
-            resource = self.world.get_cell(animal.x, animal.y).resource
-            if isinstance(resource, Water) and animal.thirst > 0:
-                thirst_before = animal.thirst
-                animal.drink(resource.drink_amount)
-                self._record_water_event("herbivores", thirst_before, animal.thirst)
-            elif isinstance(resource, Plant) and resource.state == PlantState.MATURE and animal.hunger >= 20:
-                collected_plant = self.world.collect_resource(animal.x, animal.y)
-                if collected_plant is not None:
-                    self._record_collection_event(collected_plant, "herbivore")
-                    animal.eat(35.0)
-            was_alive = animal.alive
-            animal.needs.advance_step()
-            animal.alive = animal.needs.alive
-            if was_alive and not animal.alive:
-                if "STARVATION" in animal.needs.last_damage_causes:
-                    self.herbivores_died_by_starvation += 1
-                if "DEHYDRATION" in animal.needs.last_damage_causes:
-                    self.herbivores_died_by_dehydration += 1
+            nearby_threats = [p for p in threat_positions
+                if abs(p[0] - animal.x) + abs(p[1] - animal.y) <= 3]
+            wake_reason = self._sleep_wake_reason(animal) if animal.is_sleeping else ""
+            if wake_reason:
+                animal.is_sleeping = False
+                animal.last_sleep_interruption_reason = wake_reason
+                animal._sleep_interruption_event = wake_reason
+            if animal.is_sleeping:
+                action = (0, 0)
+                activity = "SLEEPING"
+            elif (animal.needs.fatigue >= self.physiology_config.sleep_start_threshold
+                  and animal.hunger < 35.0
+                  and animal.thirst < 40.0
+                  and not nearby_threats):
+                animal.is_sleeping = True
+                animal.last_sleep_interruption_reason = ""
+                action = (0, 0)
+                activity = "SLEEPING"
+            elif (animal.needs.energy < 12.0 and animal.hunger < 45.0
+                  and animal.thirst < 45.0 and not nearby_threats):
+                action = (0, 0)
+                activity = "RESTING"
+            else:
+                action = animal.choose_action(self.world, threat_positions)
+                activity = "WAITING" if action == (0, 0) else "WALKING"
+                target = getattr(animal, "target", None)
+                target_distance = (abs(target[0] - animal.x) + abs(target[1] - animal.y)) if target else 0
+                urgent = (
+                    (isinstance(animal, Herbivore) and (animal.fleeing or animal.hunger >= 65 or animal.thirst >= 65))
+                    or (isinstance(animal, Carnivore) and (
+                        (animal.hunger >= 30 and target_distance >= 3)
+                        or (animal.thirst >= 55 and target_distance >= 3)
+                    ))
+                )
+                animal.running = bool(urgent and (animal.fleeing if isinstance(animal, Herbivore) else target_distance >= 2)
+                    and animal.needs.energy >= self.physiology_config.stamina_run_minimum)
+                if animal.running and action != (0, 0):
+                    activity = "RUNNING"
+            before_move = (animal.x, animal.y)
+            if action != (0, 0):
+                max_distance = 2 if animal.running and animal.needs.energy >= self.physiology_config.stamina_run_cost else 1
+                for _ in range(max_distance):
+                    nx, ny = animal.x + action[0], animal.y + action[1]
+                    occupied_now = occupied_agents | (occupied_animals - {before_move})
+                    if (nx, ny) in occupied_now or not self.world.is_walkable(nx, ny):
+                        break
+                    if not self.world.move_agent(animal, action):
+                        break
+                if (animal.x, animal.y) != before_move:
+                    occupied_animals.discard(before_move)
+                    occupied_animals.add((animal.x, animal.y))
+                else:
+                    activity = "WAITING"
+                    animal.running = False
+            animal.last_activity = activity
 
-        # Carnívoros procuram presas vivas (humanos e herbívoros), sem ocupar
-        # células de outras entidades. O combate é resolvido após o movimento.
+            resource = self.world.get_cell(animal.x, animal.y).resource
+            if activity != "SLEEPING":
+                if isinstance(resource, Water) and animal.thirst > 0:
+                    thirst_before = animal.thirst
+                    animal.drink(resource.drink_amount)
+                    self._record_water_event("herbivores", thirst_before, animal.thirst)
+                elif isinstance(resource, Plant) and resource.state == PlantState.MATURE and animal.hunger >= 20:
+                    collected_plant = self.world.collect_resource(animal.x, animal.y)
+                    if collected_plant is not None:
+                        self._record_collection_event(collected_plant, "herbivore")
+                        animal.eat(35.0)
+            stamina_before_recovery = animal.needs.energy
+            if activity == "RUNNING" and (animal.x, animal.y) != before_move:
+                animal.needs.energy = max(0.0, animal.needs.energy - self.physiology_config.stamina_run_cost)
+            elif (animal.x, animal.y) != before_move:
+                animal.needs.energy = max(0.0, animal.needs.energy - ENERGY_PER_STEP * (abs(animal.x-before_move[0])+abs(animal.y-before_move[1])))
+            elif activity == "RESTING":
+                animal.needs.restore_energy(self.physiology_config.stamina_rest_recovery)
+            elif activity == "WAITING":
+                animal.needs.restore_energy(self.physiology_config.stamina_wait_recovery)
+            elif activity == "SLEEPING":
+                animal.needs.restore_energy(self.physiology_config.stamina_sleep_recovery)
+            stamina_recovered_activity = max(0.0, animal.needs.energy - stamina_before_recovery)
+            activity_costs = {
+                "WAITING": (self.physiology_config.hunger_wait_cost, self.physiology_config.thirst_wait_cost, self.physiology_config.fatigue_wait_per_step),
+                "WALKING": (self.physiology_config.hunger_walk_cost, self.physiology_config.thirst_walk_cost, self.physiology_config.fatigue_walk_per_step),
+                "RUNNING": (self.physiology_config.hunger_run_cost, self.physiology_config.thirst_run_cost, self.physiology_config.fatigue_run_per_step),
+                "RESTING": (self.physiology_config.hunger_rest_cost, self.physiology_config.thirst_rest_cost, self.physiology_config.fatigue_rest_per_step),
+                "SLEEPING": (self.physiology_config.hunger_rest_cost, self.physiology_config.thirst_rest_cost,
+                    -(self.physiology_config.fatigue_shelter_sleep_recovery if isinstance(self.world.get_cell(animal.x, animal.y).structure, Shelter)
+                      else self.physiology_config.fatigue_sleep_recovery)),
+            }
+            hunger_extra, thirst_extra, fatigue_delta = activity_costs[activity]
+            animal.needs.advance_step(hunger_extra=hunger_extra, thirst_extra=thirst_extra, fatigue_delta=fatigue_delta)
+            if activity == "SLEEPING" and animal.needs.fatigue <= self.physiology_config.sleep_end_threshold:
+                animal.is_sleeping = False
+            animal.alive = animal.needs.alive
+            self.physiology_activity_history.append({
+                "step": self.steps + 1, "simulated_minute": self.simulated_minutes + 1,
+                "individual_type": "HERBIVORE", "individual_id": f"V{self.herbivores.index(animal)+1:03d}",
+                "x": animal.x, "y": animal.y, "activity": activity,
+                "behavior_intent": "FLEE" if animal.fleeing else ("SEEK_RESOURCE" if animal.target else activity),
+                "moved": (animal.x, animal.y) != before_pos,
+                "distance": float(abs(animal.x-before_pos[0])+abs(animal.y-before_pos[1])),
+                "stamina_before": before_state["stamina"], "stamina_after": animal.needs.energy,
+                "stamina_spent_movement": ((self.physiology_config.stamina_run_cost if activity == "RUNNING" else ENERGY_PER_STEP * abs(animal.x-before_pos[0])+ENERGY_PER_STEP * abs(animal.y-before_pos[1])) if activity in {"WALKING", "RUNNING"} else 0.0),
+                "stamina_recovered_rest": stamina_recovered_activity,
+                "stamina_spent_combat": 0.0,
+                "hunger_metabolic_cost": animal.needs.hunger_per_step + hunger_extra,
+                "thirst_metabolic_cost": animal.needs.thirst_per_step + thirst_extra,
+                "fatigue_delta": fatigue_delta,
+                "fatigue_before": before_state["fatigue"], "fatigue_after": animal.needs.fatigue,
+                "hunger_before": before_state["hunger"], "hunger_after": animal.hunger,
+                "thirst_before": before_state["thirst"], "thirst_after": animal.thirst,
+                "health_before": before_state["health"], "health_after": animal.health,
+                "damage_causes": ";".join(animal.needs.last_damage_causes),
+                "sleeping_after_step": animal.is_sleeping,
+                "sleep_interruption_reason": animal._sleep_interruption_event,
+                "termination_cause": "RUNNING" if animal.alive else (animal.needs.last_damage_cause or "HEALTH_DEPLETED"),
+            })
+            if was_alive := before_state["health"] > 0:
+                if not animal.alive:
+                    if "STARVATION" in animal.needs.last_damage_causes:
+                        self.herbivores_died_by_starvation += 1
+                    if "DEHYDRATION" in animal.needs.last_damage_causes:
+                        self.herbivores_died_by_dehydration += 1
+
+        # Carnívoros usam a mesma regra de corrida e sono, mas podem dormir apenas
+        # quando não há presa próxima nem necessidade fisiológica urgente.
         for carnivore in list(self.alive_carnivores):
+            carnivore._sleep_interruption_event = ""
+            before_pos = (carnivore.x, carnivore.y)
+            before_state = {
+                "health": carnivore.health, "hunger": carnivore.hunger,
+                "thirst": carnivore.thirst, "stamina": carnivore.needs.energy,
+                "fatigue": carnivore.needs.fatigue,
+            }
             test_target = getattr(carnivore, "test_target_agent", None)
             if test_target is not None and test_target.alive:
                 prey_positions = [(test_target.x, test_target.y)]
             else:
-                human_positions = [(a.x, a.y) for a in self.alive_agents]
-                herbivore_positions = [(h.x, h.y) for h in self.alive_herbivores]
-                prey_positions = human_positions + herbivore_positions
-            action = carnivore.choose_action(self.world, prey_positions)
-            destination = (carnivore.x + action[0], carnivore.y + action[1])
-            occupied = (set(human_positions) | set(herbivore_positions)
-                        | {(c.x, c.y) for c in self.alive_carnivores if c is not carnivore})
-            if action != (0, 0) and destination not in occupied and self.world.is_walkable(*destination):
-                self.world.move_agent(carnivore, action)
+                prey_positions = ([(a.x, a.y) for a in self.alive_agents]
+                                  + [(h.x, h.y) for h in self.alive_herbivores])
+            nearby_threats = []  # carnívoros não tratam presas como ameaça durante o sono
+            wake_reason = self._sleep_wake_reason(carnivore) if carnivore.is_sleeping else ""
+            if wake_reason:
+                carnivore.is_sleeping = False
+                carnivore.last_sleep_interruption_reason = wake_reason
+                carnivore._sleep_interruption_event = wake_reason
+            if carnivore.is_sleeping:
+                action = (0, 0); activity = "SLEEPING"
+            elif (carnivore.needs.fatigue >= self.physiology_config.sleep_start_threshold
+                  and carnivore.hunger < 35.0
+                  and carnivore.thirst < 40.0
+                  and not any(abs(px-carnivore.x)+abs(py-carnivore.y) <= 3 for px,py in prey_positions)):
+                carnivore.is_sleeping = True
+                carnivore.last_sleep_interruption_reason = ""
+                action = (0, 0); activity = "SLEEPING"
+            elif (carnivore.needs.energy < 12.0 and carnivore.hunger < 45.0
+                  and carnivore.thirst < 45.0 and not any(abs(px-carnivore.x)+abs(py-carnivore.y) <= 3 for px,py in prey_positions)):
+                action = (0, 0); activity = "RESTING"
+            else:
+                action = carnivore.choose_action(self.world, prey_positions)
+                activity = "WAITING" if action == (0, 0) else "WALKING"
+                target = getattr(carnivore, "target", None)
+                target_distance = (abs(target[0]-carnivore.x)+abs(target[1]-carnivore.y)) if target else 0
+                urgent = (carnivore.hunger >= 30 and target_distance >= 3) or (carnivore.thirst >= 55 and target_distance >= 3)
+                carnivore.running = bool(urgent and target_distance >= 2
+                    and carnivore.needs.energy >= self.physiology_config.stamina_run_minimum)
+                if carnivore.running and action != (0,0): activity = "RUNNING"
+            if action != (0, 0):
+                max_distance = 2 if carnivore.running and carnivore.needs.energy >= self.physiology_config.stamina_run_cost else 1
+                for _ in range(max_distance):
+                    nx, ny = carnivore.x + action[0], carnivore.y + action[1]
+                    occupied_now = ({(a.x,a.y) for a in self.alive_agents}
+                        | {(h.x,h.y) for h in self.alive_herbivores if h is not carnivore}
+                        | {(c.x,c.y) for c in self.alive_carnivores if c is not carnivore})
+                    if (nx,ny) in occupied_now or not self.world.is_walkable(nx,ny): break
+                    if not self.world.move_agent(carnivore, action): break
+                if (carnivore.x, carnivore.y) == before_pos:
+                    activity = "WAITING"
+                    carnivore.running = False
+            carnivore.last_activity = activity
             resource = self.world.get_cell(carnivore.x, carnivore.y).resource
-            if isinstance(resource, Water) and carnivore.thirst > 0:
-                thirst_before = carnivore.thirst
-                carnivore.drink(resource.drink_amount)
-                self._record_water_event("carnivores", thirst_before, carnivore.thirst)
-            was_alive = carnivore.alive
-            carnivore.needs.advance_step()
+            if activity != "SLEEPING":
+                if isinstance(resource, Water) and carnivore.thirst > 0:
+                    thirst_before = carnivore.thirst
+                    carnivore.drink(resource.drink_amount)
+                    self._record_water_event("carnivores", thirst_before, carnivore.thirst)
+            displacement = abs(carnivore.x-before_pos[0])+abs(carnivore.y-before_pos[1])
+            stamina_before_recovery = carnivore.needs.energy
+            if activity == "RUNNING" and displacement:
+                carnivore.needs.energy = max(0.0, carnivore.needs.energy-self.physiology_config.stamina_run_cost)
+            elif displacement:
+                carnivore.needs.energy = max(0.0, carnivore.needs.energy-ENERGY_PER_STEP*displacement)
+            elif activity == "RESTING":
+                carnivore.needs.restore_energy(self.physiology_config.stamina_rest_recovery)
+            elif activity == "WAITING":
+                carnivore.needs.restore_energy(self.physiology_config.stamina_wait_recovery)
+            elif activity == "SLEEPING":
+                carnivore.needs.restore_energy(self.physiology_config.stamina_sleep_recovery)
+            stamina_recovered_activity = max(0.0, carnivore.needs.energy - stamina_before_recovery)
+            activity_costs = {
+                "WAITING": (self.physiology_config.hunger_wait_cost, self.physiology_config.thirst_wait_cost, self.physiology_config.fatigue_wait_per_step),
+                "WALKING": (self.physiology_config.hunger_walk_cost, self.physiology_config.thirst_walk_cost, self.physiology_config.fatigue_walk_per_step),
+                "RUNNING": (self.physiology_config.hunger_run_cost, self.physiology_config.thirst_run_cost, self.physiology_config.fatigue_run_per_step),
+                "RESTING": (self.physiology_config.hunger_rest_cost, self.physiology_config.thirst_rest_cost, self.physiology_config.fatigue_rest_per_step),
+                "SLEEPING": (self.physiology_config.hunger_rest_cost, self.physiology_config.thirst_rest_cost,
+                    -(self.physiology_config.fatigue_shelter_sleep_recovery if isinstance(self.world.get_cell(carnivore.x, carnivore.y).structure, Shelter)
+                      else self.physiology_config.fatigue_sleep_recovery)),
+            }
+            hunger_extra, thirst_extra, fatigue_delta = activity_costs[activity]
+            carnivore.needs.advance_step(hunger_extra=hunger_extra, thirst_extra=thirst_extra, fatigue_delta=fatigue_delta)
+            if activity == "SLEEPING" and carnivore.needs.fatigue <= self.physiology_config.sleep_end_threshold:
+                carnivore.is_sleeping = False
             carnivore.alive = carnivore.needs.alive
-            if was_alive and not carnivore.alive:
+            self.physiology_activity_history.append({
+                "step": self.steps + 1, "simulated_minute": self.simulated_minutes + 1,
+                "individual_type": "CARNIVORE", "individual_id": f"C{self.carnivores.index(carnivore)+1:03d}",
+                "x": carnivore.x, "y": carnivore.y, "activity": activity,
+                "behavior_intent": "HUNT" if carnivore.hunger >= 30 else ("SEEK_WATER" if carnivore.thirst >= 55 else activity),
+                "moved": displacement > 0, "distance": float(displacement),
+                "stamina_before": before_state["stamina"], "stamina_after": carnivore.needs.energy,
+                "stamina_spent_movement": ((self.physiology_config.stamina_run_cost if activity == "RUNNING" else ENERGY_PER_STEP * displacement) if activity in {"WALKING","RUNNING"} else 0.0),
+                "stamina_recovered_rest": stamina_recovered_activity,
+                "stamina_spent_combat": 0.0,
+                "hunger_metabolic_cost": carnivore.needs.hunger_per_step + hunger_extra,
+                "thirst_metabolic_cost": carnivore.needs.thirst_per_step + thirst_extra,
+                "fatigue_delta": fatigue_delta,
+                "fatigue_before": before_state["fatigue"], "fatigue_after": carnivore.needs.fatigue,
+                "hunger_before": before_state["hunger"], "hunger_after": carnivore.hunger,
+                "thirst_before": before_state["thirst"], "thirst_after": carnivore.thirst,
+                "health_before": before_state["health"], "health_after": carnivore.health,
+                "damage_causes": ";".join(carnivore.needs.last_damage_causes),
+                "sleeping_after_step": carnivore.is_sleeping,
+                "sleep_interruption_reason": carnivore._sleep_interruption_event,
+                "termination_cause": "RUNNING" if carnivore.alive else (carnivore.needs.last_damage_cause or "HEALTH_DEPLETED"),
+            })
+            if not carnivore.alive:
                 if "STARVATION" in carnivore.needs.last_damage_causes:
                     self.carnivores_died_by_starvation += 1
                 if "DEHYDRATION" in carnivore.needs.last_damage_causes:
@@ -1099,7 +1474,7 @@ class Simulation:
         # Humanos podem se defender se um carnívoro entrar em alcance corpo a corpo.
         # Defesa não exige fome; ataque de caça a herbívoro continua sendo outra ação.
         for agent in self.alive_agents:
-            if agent.energy < ATTACK_STAMINA_COST:
+            if agent.energy < self.physiology_config.stamina_attack_cost:
                 continue
             if any(abs(c.x-agent.x) + abs(c.y-agent.y) <= 1 for c in self.alive_carnivores):
                 target = min(
@@ -1107,7 +1482,8 @@ class Simulation:
                      if abs(c.x-agent.x) + abs(c.y-agent.y) <= 1),
                     key=lambda c: abs(c.x-agent.x) + abs(c.y-agent.y),
                 )
-                agent.consume_energy(ATTACK_STAMINA_COST)
+                agent.consume_energy(self.physiology_config.stamina_attack_cost)
+                combat_stamina_spent[id(agent)] = combat_stamina_spent.get(id(agent), 0.0) + self.physiology_config.stamina_attack_cost
                 target.needs.damage(20.0, cause="DEFENSE")
                 self.human_defense_attacks += 1
                 target.alive = target.needs.alive
@@ -1118,7 +1494,7 @@ class Simulation:
         # depois herbívoros. Cada indivíduo só pode receber um ataque por tick.
         attacked_this_step: set[int] = set()
         for carnivore in self.alive_carnivores:
-            if carnivore.hunger < 30.0:
+            if carnivore.hunger < 30.0 or carnivore.needs.energy < self.physiology_config.stamina_attack_cost:
                 continue
             test_target = getattr(carnivore, "test_target_agent", None)
             available_targets = (
@@ -1148,6 +1524,8 @@ class Simulation:
                 # O abrigo reduz bastante o dano, mas não torna o ocupante invulnerável.
                 damage *= SHELTER_PREDATION_DAMAGE_MULTIPLIER
             health_before_attack = target.health
+            carnivore.needs.energy = max(0.0, carnivore.needs.energy - self.physiology_config.stamina_attack_cost)
+            combat_stamina_spent[id(carnivore)] = combat_stamina_spent.get(id(carnivore), 0.0) + self.physiology_config.stamina_attack_cost
             actual_damage = target.needs.damage(damage, cause="PREDATION")
             attacked_this_step.add(id(target))
             self.carnivore_attacks += 1
@@ -1214,6 +1592,36 @@ class Simulation:
                     for cause, cumulative in agent.needs.damage_by_cause.items()
                     if cumulative - damage_before[key].get(cause, 0.0) > 0
                 }
+                if self.physiology_activity_history:
+                    for activity_record in reversed(self.physiology_activity_history):
+                        if activity_record.get("individual_type") == "HUMAN" and activity_record.get("individual_id") == (agent.agent_id or f"H{id(agent)}") and activity_record.get("step") == self.steps + 1:
+                            activity_record["stamina_after"] = agent.energy
+                            activity_record["stamina_spent_combat"] = combat_stamina_spent.get(id(agent), 0.0)
+                            activity_record["health_after"] = agent.health
+                            activity_record["damage_causes"] = ";".join(agent.needs.last_damage_causes)
+                            activity_record["termination_cause"] = "RUNNING" if agent.alive else (agent.needs.last_damage_cause or "HEALTH_DEPLETED")
+                            break
+
+        current_activity_records = {
+            (str(record.get("individual_type")), str(record.get("individual_id"))): record
+            for record in self.physiology_activity_history
+            if record.get("step") == self.steps + 1
+        }
+        for individual_type, individuals, prefix in (
+            ("HERBIVORE", self.herbivores, "V"),
+            ("CARNIVORE", self.carnivores, "C"),
+        ):
+            for index, individual in enumerate(individuals, start=1):
+                individual_id = f"{prefix}{index:03d}"
+                activity_record = current_activity_records.get((individual_type, individual_id))
+                if activity_record is None:
+                    continue
+                activity_record["health_after"] = individual.health
+                activity_record["damage_causes"] = ";".join(individual.needs.last_damage_causes)
+                activity_record["termination_cause"] = "RUNNING" if individual.alive else (individual.needs.last_damage_cause or "HEALTH_DEPLETED")
+                if id(individual) in combat_stamina_spent:
+                    activity_record["stamina_after"] = individual.needs.energy
+                    activity_record["stamina_spent_combat"] = combat_stamina_spent[id(individual)]
 
         self._record_social_agent_snapshot(step=self.steps + 1)
         self._advance_environment()

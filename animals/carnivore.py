@@ -22,6 +22,11 @@ class Carnivore:
             hunger=35.0, thirst=20.0, hunger_per_step=0.3, thirst_per_step=0.2,
         )
         self.alive = self.needs.alive
+        self.is_sleeping = False
+        self.last_activity = "WAITING"
+        self.running = False
+        self.last_sleep_interruption_reason = ""
+        self._sleep_interruption_event = ""
         self.rng = rng if rng is not None else random
         self.target: tuple[int, int] | None = None
         self.path: list[tuple[int, int]] = []
@@ -30,6 +35,14 @@ class Carnivore:
     @property
     def health(self) -> float:
         return self.needs.health
+
+    @property
+    def energy(self) -> float:
+        return self.needs.energy
+
+    @property
+    def fatigue(self) -> float:
+        return self.needs.fatigue
 
     @property
     def hunger(self) -> float:

@@ -177,3 +177,21 @@ def test_cognitive_selector_can_choose_rest_when_energy_is_low():
     assert action == (0, 0)
     assert agent.last_behavior_intent == "REST"
     assert agent.last_decision_trace["action_id"] == "REST"
+
+
+def test_high_fatigue_can_trigger_persistent_sleep():
+    from agents.agent import Agent
+    from agents.needs import AgentNeeds
+    from agents.perception import Perception
+    from environment.world import World
+
+    world = World(width=9, height=9, food_count=0, obstacle_count=0, water_count=0)
+    agent = Agent(4, 4, needs=AgentNeeds(fatigue=100.0))
+    nearby = Perception().observe(world, agent.x, agent.y, radius=agent.vision_radius)
+
+    action = agent.choose_action(nearby, world)
+
+    assert action == (0, 0)
+    assert agent.last_behavior_intent == "SLEEP"
+    assert agent.is_sleeping
+    assert not agent._waiting_selected

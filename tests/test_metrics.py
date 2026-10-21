@@ -32,7 +32,7 @@ def test_metrics_track_steps():
 
     assert simulation.metrics.steps == 2
     assert simulation.metrics.final_energy == 98.0
-    assert simulation.metrics.simulated_time_seconds == 2.0
+    assert simulation.metrics.simulated_time_seconds == 120.0
 
 
 def test_metrics_track_starvation():
@@ -64,7 +64,7 @@ def test_metrics_track_simulated_time():
     simulation.step()
 
     assert simulation.metrics.steps == 2
-    assert simulation.metrics.simulated_time_seconds == 5.0
+    assert simulation.metrics.simulated_time_seconds == 120.0
 
 
 def test_metrics_track_energy_average():

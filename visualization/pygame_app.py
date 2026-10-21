@@ -144,17 +144,17 @@ def run(simulation: Simulation) -> None:
                         simulation.set_manual_control(simulation.observed_agent, False)
                         build_message = "Controle manual desativado; agente voltou a IA"
                     elif simulation.set_manual_control(simulation.observed_agent, True):
-                        build_message = "Controle manual ativo: use WASD ou as setas"
+                        build_message = "Controle manual: WASD/setas; segure Shift para correr"
                     else:
                         build_message = "Nao foi possivel controlar um agente morto"
                 elif event.key in (pygame.K_UP, pygame.K_w):
-                    simulation.queue_manual_action(0, -1)
+                    simulation.queue_manual_action(0, -1, run=bool(pygame.key.get_mods() & pygame.KMOD_SHIFT))
                 elif event.key in (pygame.K_DOWN, pygame.K_s):
-                    simulation.queue_manual_action(0, 1)
+                    simulation.queue_manual_action(0, 1, run=bool(pygame.key.get_mods() & pygame.KMOD_SHIFT))
                 elif event.key in (pygame.K_LEFT, pygame.K_a):
-                    simulation.queue_manual_action(-1, 0)
+                    simulation.queue_manual_action(-1, 0, run=bool(pygame.key.get_mods() & pygame.KMOD_SHIFT))
                 elif event.key in (pygame.K_RIGHT, pygame.K_d):
-                    simulation.queue_manual_action(1, 0)
+                    simulation.queue_manual_action(1, 0, run=bool(pygame.key.get_mods() & pygame.KMOD_SHIFT))
                 elif event.key == pygame.K_1:
                     simulation_speed = 1
                 elif event.key == pygame.K_2:
