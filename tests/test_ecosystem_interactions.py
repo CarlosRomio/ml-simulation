@@ -1,6 +1,7 @@
 import random
 
 from agents.agent import Agent
+from agents.needs import AgentNeeds
 from animals.carnivore import Carnivore
 from animals.factory import CarnivoreFactory, HerbivoreFactory
 from animals.herbivore import Herbivore
@@ -131,3 +132,29 @@ def test_herbivore_flees_from_nearby_carnivore():
     animal = Herbivore(x=3, y=3, rng=random.Random(4))
     action = animal.choose_action(world, [(4, 3)])
     assert action in {(-1, 0), (0, -1), (0, 1)}
+
+
+def test_carnivore_moves_onto_adjacent_water_instead_of_waiting_next_to_it():
+    world = World(width=7, height=3, food_count=0, obstacle_count=0, water_count=0)
+    world.get_cell(4, 1).resource = Water()
+    carnivore = Carnivore(
+        x=3, y=1,
+        needs=AgentNeeds(hunger=10.0, thirst=60.0, hunger_per_step=0.0, thirst_per_step=0.0),
+    )
+
+    action = carnivore.choose_action(world, [])
+
+    assert action == (1, 0)
+
+
+def test_carnivore_leaves_water_when_thirst_is_satisfied_to_seek_prey():
+    world = World(width=7, height=3, food_count=0, obstacle_count=0, water_count=0)
+    world.get_cell(3, 1).resource = Water()
+    carnivore = Carnivore(
+        x=3, y=1,
+        needs=AgentNeeds(hunger=60.0, thirst=0.2, hunger_per_step=0.0, thirst_per_step=0.0),
+    )
+
+    action = carnivore.choose_action(world, [(5, 1)])
+
+    assert action == (1, 0)

@@ -16,6 +16,8 @@ def find_path(
     world,
     start: Position,
     goal: Position,
+    *,
+    blocked_positions: set[Position] | None = None,
 ) -> list[Position] | None:
     """
     Encontra o caminho mais curto entre duas posições usando BFS.
@@ -30,13 +32,18 @@ def find_path(
     start_x, start_y = start
     goal_x, goal_y = goal
 
+    blocked = set(blocked_positions or ())
+    # A posição inicial é válida mesmo que o chamador a inclua no conjunto.
+    blocked.discard(start)
+
     # Verifica se as posições estão dentro do mundo.
     for x, y in (start, goal):
         if not (0 <= x < world.width and 0 <= y < world.height):
             return None
 
-    # O destino precisa ser transitável.
-    if not world.is_walkable(goal_x, goal_y):
+    # O destino precisa ser transitável e não pode estar ocupado por outro
+    # indivíduo quando a busca é usada para navegação dinâmica.
+    if not world.is_walkable(goal_x, goal_y) or goal in blocked:
         return None
 
     if start == goal:
@@ -67,7 +74,7 @@ def find_path(
             ):
                 continue
 
-            if neighbor in previous:
+            if neighbor in previous or neighbor in blocked:
                 continue
 
             if not world.is_walkable(nx, ny):

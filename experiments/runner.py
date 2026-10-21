@@ -29,6 +29,8 @@ class SimulationRunResult:
     population_history: list[dict[str, int | float]] = field(default_factory=list)
     ecology_history: list[dict[str, int | float]] = field(default_factory=list)
     human_physiology_history: list[list[dict]] = field(default_factory=list)
+    physiology_activity_history: list[dict[str, object]] = field(default_factory=list)
+    carnivore_hunt_history: list[dict[str, object]] = field(default_factory=list)
     agent_ids: list[str] = field(default_factory=list)
     social_history: list[dict[str, object]] = field(default_factory=list)
     social_agent_history: list[dict[str, object]] = field(default_factory=list)
@@ -46,6 +48,7 @@ class SimulationRunResult:
     herbivores_died_by_dehydration: int = 0
     carnivores_died_by_starvation: int = 0
     carnivores_died_by_dehydration: int = 0
+    initial_individual_states: list[dict[str, object]] = field(default_factory=list)
 
 @dataclass
 class ExperimentSummary:
@@ -169,6 +172,33 @@ def run_single_simulation(
         social_behavior_enabled=social_behavior_enabled,
         social_memory_enabled=social_memory_enabled,
     )
+    initial_individual_states: list[dict[str, object]] = []
+    for index, individual in enumerate(simulation.agents, start=1):
+        initial_individual_states.append({
+            "individual_type": "HUMAN",
+            "individual_id": individual.agent_id or f"H{index:03d}",
+            "x": individual.x, "y": individual.y,
+            "health": individual.health, "hunger": individual.hunger,
+            "thirst": individual.thirst, "stamina": individual.energy,
+            "fatigue": individual.needs.fatigue, "is_sleeping": individual.is_sleeping,
+        })
+    for index, individual in enumerate(simulation.herbivores, start=1):
+        initial_individual_states.append({
+            "individual_type": "HERBIVORE", "individual_id": f"V{index:03d}",
+            "x": individual.x, "y": individual.y,
+            "health": individual.health, "hunger": individual.hunger,
+            "thirst": individual.thirst, "stamina": individual.energy,
+            "fatigue": individual.needs.fatigue, "is_sleeping": individual.is_sleeping,
+        })
+    for index, individual in enumerate(simulation.carnivores, start=1):
+        initial_individual_states.append({
+            "individual_type": "CARNIVORE", "individual_id": f"C{index:03d}",
+            "x": individual.x, "y": individual.y,
+            "health": individual.health, "hunger": individual.hunger,
+            "thirst": individual.thirst, "stamina": individual.energy,
+            "fatigue": individual.needs.fatigue, "is_sleeping": individual.is_sleeping,
+        })
+
     simulation.run(max_steps)
 
     plant_counts = world.get_plant_counts()
@@ -202,6 +232,8 @@ def run_single_simulation(
         social_history=list(simulation.social_history),
         social_agent_history=list(simulation.social_agent_history),
         social_decision_history=list(simulation.social_decision_history),
+        physiology_activity_history=list(simulation.physiology_activity_history),
+        carnivore_hunt_history=list(simulation.carnivore_hunt_history),
         human_physiology_history=[
             [{
                 "step": 0,
@@ -255,6 +287,7 @@ def run_single_simulation(
         herbivores_died_by_dehydration=simulation.herbivores_died_by_dehydration,
         carnivores_died_by_starvation=simulation.carnivores_died_by_starvation,
         carnivores_died_by_dehydration=simulation.carnivores_died_by_dehydration,
+        initial_individual_states=initial_individual_states,
     )
 
 class ExperimentRunner:

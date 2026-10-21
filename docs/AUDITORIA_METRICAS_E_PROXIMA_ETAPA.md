@@ -78,3 +78,10 @@ Os logs sociais são exportados por `run_ecosystem_experiment.py` para `social_h
 A configuração `SocialBehaviorConfig` centraliza ganho de afinidade, decaimento, limiar de afinidade para reencontro, duração da memória espacial e distância máxima de busca. A afinidade relacional permanece mesmo quando a posição lembrada expira; posições são atualizadas apenas quando um indivíduo é percebido novamente. Isso evita conhecimento omnisciente da localização atual de outros agentes.
 
 O arquivo `social_decisions_history.csv` registra uma linha por humano vivo e passo, com decisão, motivo, alvo social, afinidade, idade da última observação, posição antes/depois e se houve deslocamento. Decisões `SOCIAL_REUNION_SEARCH_FAILED` indicam que o agente chegou à última posição conhecida sem encontrar o contato e descartou aquela memória espacial, preservando a afinidade.
+
+
+## Correção da navegação dinâmica dos herbívoros
+
+A seleção de recursos dos herbívoros agora considera ocupação dinâmica e evita planejar através de humanos, herbívoros ou carnívoros. Quando a rota estática atravessa uma posição ocupada, o caminho é recalculado com as células ocupadas bloqueadas. Fontes de água ocupadas são ignoradas em favor de fontes alternativas; quando não existe rota viável para o recurso prioritário, o agente pode tentar o recurso da outra necessidade que também esteja urgente ou explorar.
+
+A instrumentação separa bloqueios reais de movimento (`movement_block_reason`) de bloqueios considerados pelo planejador (`navigation_block_reason`). Os contadores de navegação evitada não são equivalentes a colisões efetivas e devem ser analisados separadamente.

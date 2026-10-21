@@ -1,4 +1,7 @@
-# ML Simulation — auditoria fisiológica e ecológica
+# ML Simulation
+
+> **Tempo simulado:** cada passo equivale a um minuto do mundo. Consulte `docs/TEMPORAL_PHYSIOLOGY_STAGE1.md` e `docs/PHYSIOLOGY_STAGE2.md` para a convenção temporal, sono, corrida, estamina e resultados de calibração.
+ — auditoria fisiológica e ecológica
 
 Projeto de simulação em grade para estudar sobrevivência de humanos e interações com herbívoros e carnívoros. A arquitetura está migrando gradualmente de prioridades rígidas para decisões avaliadas. A simulação ainda não treina um modelo de ML nem atualiza recompensas automaticamente; consulte `docs/AGENT_COGNITION.md` para o estado exato desta etapa.
 
@@ -7,7 +10,18 @@ Projeto de simulação em grade para estudar sobrevivência de humanos e intera�
 ```powershell
 py -3.13 -m pytest -q
 py -3.13 run_ecosystem_experiment.py
+py -3.13 run_physiology_experiment.py
 ```
+
+## Calibração de sono, corrida e metabolismo
+
+Para executar o lote de calibração fisiológica (8 sementes, 900 passos/15 horas simuladas por execução):
+
+```powershell
+py -3.13 run_physiology_experiment.py
+```
+
+O experimento gera `results/physiology_calibration/runs.csv`, `activity_history.csv` e `activity_summary.csv`. O histórico inclui atividades, decisões humanas, distância percorrida, estamina gasta em movimento e combate, recuperação efetiva, custos metabólicos brutos, fadiga, fome, sede, saúde e interrupções do sono. Consulte `docs/PHYSIOLOGY_STAGE2.md` para interpretar os parâmetros e os resultados iniciais.
 
 ## Comparação controlada do comportamento social
 
@@ -182,3 +196,15 @@ Ao executar `py -3.13 run_ecosystem_experiment.py`, a pasta `results/ecosystem_e
 Os parâmetros podem ser ajustados em `configuration/social_behavior_config.py` por meio de `SocialBehaviorConfig`: ganho de afinidade, decaimento, limiar de reencontro, duração da memória espacial e distância máxima de busca. Para alterar a configuração de uma simulação criada por código, passe `social_config=...` ao construtor de `Simulation`.
 
 `population_history.csv` e `runs.csv` incluem indicadores agregados de proximidade e afinidade. Os valores são instrumentação descritiva: proximidade não deve ser interpretada automaticamente como cooperação ou amizade.
+
+## Auditoria experimental do ecossistema
+
+Para validar a instrumentação e gerar dados reproduzíveis, execute primeiro o piloto e depois a auditoria completa:
+
+```powershell
+py -3.13 -m pytest -q
+py -3.13 run_ecosystem_audit.py --profile pilot --workers 4
+py -3.13 run_ecosystem_audit.py --profile full --workers 4
+```
+
+O pipeline paralelo e a descrição dos CSVs estão em `docs/ecosystem_audit.md`. A auditoria também gera `carnivore_hunt_history.csv` e `carnivore_hunt_summary.csv` para investigar mortes por fome: distância e visibilidade de presas, estamina, tentativas de ataque, abates, alimentação e causa de encerramento. Essa instrumentação é apenas observacional e não altera as regras da simulação.

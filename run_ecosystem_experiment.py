@@ -225,6 +225,7 @@ def main() -> None:
     social_rows = []
     social_agent_rows = []
     social_decision_rows = []
+    physiology_activity_rows = []
     for run_index, result in enumerate(results, start=1):
         for agent_index, metrics in enumerate(result.all_agent_metrics, start=1):
             metric_data = asdict(metrics)
@@ -269,6 +270,8 @@ def main() -> None:
             social_agent_rows.append({"run": run_index, "seed": base_seed + run_index - 1, **record})
         for record in result.social_decision_history:
             social_decision_rows.append({"run": run_index, "seed": base_seed + run_index - 1, **record})
+        for record in result.physiology_activity_history:
+            physiology_activity_rows.append({"run": run_index, "seed": base_seed + run_index - 1, **record})
         for agent_index, history in enumerate(result.human_physiology_history, start=1):
             for record in history:
                 physiology_rows.append({
@@ -290,6 +293,7 @@ def main() -> None:
     _write_csv(OUTPUT_DIR / "humans.csv", human_rows)
     _write_csv(OUTPUT_DIR / "population_history.csv", population_rows)
     _write_csv(OUTPUT_DIR / "human_physiology_history.csv", physiology_rows)
+    _write_csv(OUTPUT_DIR / "physiology_activity_history.csv", physiology_activity_rows)
     _write_csv(OUTPUT_DIR / "ecology_history.csv", ecology_rows)
     _write_csv(OUTPUT_DIR / "social_history.csv", social_rows)
     _write_csv(OUTPUT_DIR / "social_agents_history.csv", social_agent_rows)
@@ -306,6 +310,7 @@ def main() -> None:
     print("  humans.csv — métricas individuais; steps/tempo são a vida do agente e experiment_steps é o horizonte da execução")
     print("  population_history.csv — série temporal de população e fisiologia agregada")
     print("  human_physiology_history.csv — estado, ações e dano de cada humano por passo")
+    print("  physiology_activity_history.csv — atividade, corrida, sono, estamina, fadiga, fome, sede e danos por indivíduo/passo (humanos e animais)")
     print("  ecology_history.csv — estoques, coleta de materiais, transições, água e regeneração por passo")
     print("  social_history.csv — distância e evolução da afinidade de cada par por passo")
     print("  social_agents_history.csv — estado social individual por passo, com IDs estáveis")
