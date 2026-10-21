@@ -4,7 +4,7 @@ from __future__ import annotations
 import random
 from random import Random
 
-from agents.navigation.bfs import find_path
+from agents.navigation.service import NavigationService
 from agents.needs import AgentNeeds
 from environment.resources import Plant, PlantState, Water
 from environment.world import World
@@ -35,6 +35,7 @@ class Herbivore:
         # impedimento detectado durante o planejamento dinâmico são distintos.
         self.last_movement_block_reason = ""
         self.last_navigation_block_reason = ""
+        self.navigation = NavigationService()
 
     @property
     def health(self) -> float:
@@ -135,14 +136,14 @@ class Herbivore:
                 if target in blocked:
                     self.last_navigation_block_reason = self.last_navigation_block_reason or classify_block(target)
                     continue
-                static_path = find_path(world, current, target)
+                static_path = self.navigation.find_path(world, current, target)
                 if not static_path:
                     self.last_navigation_block_reason = self.last_navigation_block_reason or "OBSTACLE"
                     continue
                 blocked_steps = [step for step in static_path[1:] if step in blocked]
                 if blocked_steps:
                     self.last_navigation_block_reason = self.last_navigation_block_reason or classify_block(blocked_steps[0])
-                    path = find_path(world, current, target, blocked_positions=blocked)
+                    path = self.navigation.find_path(world, current, target, blocked_positions=blocked)
                 else:
                     path = static_path
                 if not path:
@@ -150,9 +151,9 @@ class Herbivore:
                     continue
                 self.target = target
                 self.path = path
-                if len(path) > 1:
-                    nx, ny = path[1]
-                    return nx-self.x, ny-self.y
+                next_action = self.navigation.next_step(path, current)
+                if next_action is not None:
+                    return next_action
                 # Já está no recurso: permanece para beber/comer no ciclo atual.
                 return (0, 0)
 

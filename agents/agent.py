@@ -6,6 +6,7 @@ from collections.abc import Callable
 from environment.cell import Cell
 from environment.world import World
 from agents.navigation.bfs import find_path
+from agents.navigation.service import NavigationService
 from agents.needs import AgentNeeds
 from environment.resources import MaterialKind, MaterialResource, Water, Plant, Food
 from environment.storage import Storage
@@ -752,6 +753,10 @@ class Agent:
                 )
 
             pathfinder = pathfinder_avoiding_occupants
+
+        # O seletor cognitivo continua recebendo um callable por compatibilidade,
+        # mas o planejamento passa pelo contrato compartilhado de navegação.
+        pathfinder = NavigationService(pathfinder).find_path
 
         # Se o próximo passo ficou ocupado desde o planejamento anterior,
         # recalcula a rota preservando o objetivo. Se o próprio destino estiver

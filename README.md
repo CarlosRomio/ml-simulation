@@ -208,3 +208,7 @@ py -3.13 run_ecosystem_audit.py --profile full --workers 4
 ```
 
 O pipeline paralelo e a descrição dos CSVs estão em `docs/ecosystem_audit.md`. A auditoria também gera `carnivore_hunt_history.csv` e `carnivore_hunt_summary.csv` para investigar mortes por fome: distância e visibilidade de presas, estamina, tentativas de ataque, abates, alimentação e causa de encerramento. Essa instrumentação é apenas observacional e não altera as regras da simulação.
+
+## Shared navigation contract
+
+See [`docs/NAVIGATION_SERVICE.md`](docs/NAVIGATION_SERVICE.md) for the route-planning contract shared by humans, herbivores, and carnivores.

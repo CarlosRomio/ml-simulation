@@ -4,7 +4,7 @@ from __future__ import annotations
 import random
 from random import Random
 
-from agents.navigation.bfs import find_path
+from agents.navigation.service import NavigationService
 from agents.needs import AgentNeeds
 from environment.resources import Water
 from environment.world import World
@@ -35,6 +35,7 @@ class Carnivore:
         self.exploration_target: tuple[int, int] | None = None
         self._recent_positions: list[tuple[int, int]] = []
         self.kills = 0
+        self.navigation = NavigationService()
 
     @property
     def health(self) -> float:
@@ -89,12 +90,13 @@ class Carnivore:
                     self.target, self.path = target, []
                     self.exploration_target = None
                     return (0, 0)
-                path = find_path(world, here, target)
+                path = self.navigation.find_path(world, here, target)
                 if path and len(path) > 1:
                     self.target, self.path = target, path
                     self.exploration_target = None
-                    nx, ny = path[1]
-                    return nx-self.x, ny-self.y
+                    next_action = self.navigation.next_step(path, here)
+                    if next_action is not None:
+                        return next_action
 
         # Sem presa ou água acessível, patrulha um ponto persistente e distante.
         # Isso evita o passeio aleatório de uma célula por vez e reduz retornos
@@ -115,7 +117,7 @@ class Carnivore:
             except ValueError:
                 goal_path = None
         if goal_path is None and goal is not None and goal != here:
-            goal_path = find_path(world, here, goal)
+            goal_path = self.navigation.find_path(world, here, goal)
         if goal is None or goal == here or not goal_path or len(goal_path) < 2:
             max_distance = max(world.width, world.height)
             min_distance = min(5, max(2, max_distance // 10))
@@ -133,7 +135,7 @@ class Carnivore:
             selected = None
             selected_path = None
             for candidate in options[:24]:
-                path = find_path(world, here, candidate)
+                path = self.navigation.find_path(world, here, candidate)
                 if path and len(path) > 2:
                     selected, selected_path = candidate, path
                     break
@@ -141,16 +143,16 @@ class Carnivore:
                 # Mundos pequenos ou muito obstruídos: usar qualquer destino
                 # alcançável que não seja a própria célula.
                 for candidate in options[24:48]:
-                    path = find_path(world, here, candidate)
+                    path = self.navigation.find_path(world, here, candidate)
                     if path and len(path) > 1:
                         selected, selected_path = candidate, path
                         break
             self.exploration_target = selected
             goal_path = selected_path
         self.path = goal_path or []
-        if self.path and len(self.path) > 1:
-            nx, ny = self.path[1]
-            return nx-self.x, ny-self.y
+        next_action = self.navigation.next_step(self.path, here)
+        if next_action is not None:
+            return next_action
         self.exploration_target = None
         return (0, 0)
 
