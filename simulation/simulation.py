@@ -28,8 +28,6 @@ from simulation.health_recovery import recover_health_during_rest
 
 FOOD_ENERGY = 35.0
 ENERGY_PER_STEP = 1.0  # custo de estamina por célula percorrida
-RUN_STAMINA_COST = 8.0
-ATTACK_STAMINA_COST = 8.0
 ATTACK_DAMAGE = 30.0
 CARNIVORE_ATTACK_DAMAGE = 35.0
 SHELTER_PREDATION_DAMAGE_MULTIPLIER = 0.25
