@@ -46,6 +46,7 @@ def main():
         thirst_per_step=config.thirst_per_step,
         dehydration_threshold=config.dehydration_threshold,
         dehydration_damage_per_step=config.dehydration_damage_per_step,
+        attribute_variation=config.attribute_variation,
     )
 
     herbivores = HerbivoreFactory.create(
@@ -54,6 +55,7 @@ def main():
         vision_radius=config.vision_radius,
         seed=84,
         occupied_positions={(agent.x, agent.y) for agent in agents},
+        attribute_variation=config.attribute_variation,
     )
 
     carnivores = CarnivoreFactory.create(
@@ -62,6 +64,7 @@ def main():
         vision_radius=config.vision_radius,
         seed=126,
         occupied_positions={(item.x, item.y) for item in [*agents, *herbivores]},
+        attribute_variation=config.attribute_variation,
     )
 
     simulation = Simulation(
@@ -69,12 +72,14 @@ def main():
         agents=agents,
         herbivores=herbivores,
         carnivores=carnivores,
+        max_plants=config.max_plants_capacity,
     )
 
     print("=== Configuração da simulação ===")
     print(f"Dimensões: {config.width} x {config.height}")
     print(f"Área: {config.area} células")
-    print(f"Plantas: {config.food_count}")
+    print(f"Plantas iniciais: {config.food_count}")
+    print(f"Limite de plantas: {config.max_plants_capacity}")
     print(f"Fontes de água: {config.water_count}")
     print(f"Depósitos de madeira: {config.wood_count}")
     print(f"Depósitos de pedra: {config.stone_count}")
@@ -84,7 +89,8 @@ def main():
     print(f"Agentes humanos: {config.agent_count}")
     print(f"Herbívoros: {config.herbivore_count}")
     print(f"Carnívoros: {config.carnivore_count}")
-    print(f"Raio de visão: {config.vision_radius}")
+    print(f"Raio de visão base: {config.vision_radius}")
+    print(f"Variação individual de atributos: {config.attribute_variation}")
 
     run(simulation)
 

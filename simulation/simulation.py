@@ -29,6 +29,39 @@ MEAT_HUNGER_REDUCTION = 70.0
 MEAT_STAMINA_REWARD = 25.0
 
 
+def _target_progress_fields(
+    target: object,
+    intent: object,
+    position_before: tuple[int, int],
+    position_after: tuple[int, int],
+    *,
+    need_satisfied: bool = False,
+) -> dict[str, object]:
+    """Campos observacionais de progresso; não participam das decisões."""
+    if not isinstance(target, (tuple, list)) or len(target) < 2:
+        return {
+            "target_intent_before_action": str(intent or "NONE"),
+            "target_x_before_action": "", "target_y_before_action": "",
+            "target_distance_before_action": "", "target_distance_after_action": "",
+            "target_distance_progress": "", "target_in_interaction_range": False,
+            "target_reached": False, "need_satisfied_this_step": bool(need_satisfied),
+        }
+    target_position = (int(target[0]), int(target[1]))
+    distance_before = abs(target_position[0] - position_before[0]) + abs(target_position[1] - position_before[1])
+    distance_after = abs(target_position[0] - position_after[0]) + abs(target_position[1] - position_after[1])
+    return {
+        "target_intent_before_action": str(intent or "NONE"),
+        "target_x_before_action": target_position[0],
+        "target_y_before_action": target_position[1],
+        "target_distance_before_action": distance_before,
+        "target_distance_after_action": distance_after,
+        "target_distance_progress": distance_before - distance_after,
+        "target_in_interaction_range": distance_after <= 1,
+        "target_reached": distance_after == 0,
+        "need_satisfied_this_step": bool(need_satisfied),
+    }
+
+
 class Simulation:
     def build_shelter(self, agent: Agent) -> bool:
         """Constrói na posição atual por 5 madeiras e 2 pedras.
@@ -854,7 +887,7 @@ class Simulation:
 
             moved = False
             block_reason = ""
-            distance = 2 if agent.running and agent.energy >= self.physiology_config.stamina_run_cost else 1
+            distance = agent.run_distance if agent.running and agent.energy >= self.physiology_config.stamina_run_cost else 1
             for _ in range(distance):
                 next_position = (agent.x + dx, agent.y + dy)
                 if next_position in occupied:
@@ -894,7 +927,7 @@ class Simulation:
         if action == (0, 0):
             return False
         start = (animal.x, animal.y)
-        max_distance = 2 if animal.running and animal.needs.energy >= self.physiology_config.stamina_run_cost else 1
+        max_distance = animal.run_distance if animal.running and animal.needs.energy >= self.physiology_config.stamina_run_cost else 1
         moved = False
         for _ in range(max_distance):
             destination = (animal.x + action[0], animal.y + action[1])
@@ -1126,6 +1159,12 @@ class Simulation:
                 agent.running = bool(urgent_target and target_distance >= 3)
             else:
                 agent.running = False
+
+        # Snapshot do alvo antes do movimento para medir progresso sem inferir o
+        # alvo a partir do estado posterior à interação.
+        target_snapshots = {
+            id(agent): (agent.target, agent.target_intent) for agent in alive_at_start
+        }
 
         # Cada tecla corresponde a um único passo, evitando movimento contínuo
         # involuntário quando a simulação está em velocidade acelerada.
@@ -1379,6 +1418,16 @@ class Simulation:
                 "decision_score": (agent.last_decision_trace or {}).get("score", ""),
                 "moved": bool(moved), "distance": float(displacement),
                 "movement_block_reason": agent.last_movement_block_reason,
+                **_target_progress_fields(
+                    target_snapshots.get(key, (None, "NONE"))[0],
+                    target_snapshots.get(key, (None, "NONE"))[1],
+                    before[key], after_move,
+                    need_satisfied=bool(
+                        (target_snapshots.get(key, (None, "NONE"))[1] == "SEEK_WATER" and drank_water)
+                        or (target_snapshots.get(key, (None, "NONE"))[1] == "SEEK_FOOD" and consumed_food > 0)
+                        or (target_snapshots.get(key, (None, "NONE"))[1] == "HUNT" and consumed_food > 0)
+                    ),
+                ),
                 "stamina_before": energy_before[key], "stamina_after": agent.energy,
                 "stamina_spent_movement": movement_energy_cost,
                 "stamina_recovered_rest": rest_energy_recovered,
@@ -1523,6 +1572,7 @@ class Simulation:
             # removida no mesmo passo em que o herbívoro a come; inferir o alvo só
             # depois da ação perde justamente o evento de sucesso.
             resource_target = getattr(animal, "target", None)
+            resource_target_intent = "SEEK_RESOURCE"
             resource_target_kind = "NONE"
             resource_target_x = ""
             resource_target_y = ""
@@ -1532,10 +1582,12 @@ class Simulation:
                     target_resource = self.world.get_cell(resource_target_x, resource_target_y).resource
                     if isinstance(target_resource, Water):
                         resource_target_kind = "WATER"
+                        resource_target_intent = "SEEK_WATER"
                     elif isinstance(target_resource, Food) or (
                         isinstance(target_resource, Plant) and target_resource.state == PlantState.MATURE
                     ):
                         resource_target_kind = "FOOD"
+                        resource_target_intent = "SEEK_FOOD"
                     else:
                         resource_target_kind = "OTHER"
                 except (TypeError, ValueError, IndexError):
@@ -1556,16 +1608,20 @@ class Simulation:
             animal.last_activity = activity
 
             resource = self.world.get_cell(animal.x, animal.y).resource
+            need_satisfied_this_step = False
+            collected_plant = None
             if activity != "SLEEPING":
                 if isinstance(resource, Water) and animal.thirst > 0:
                     thirst_before = animal.thirst
                     animal.drink(resource.drink_amount)
+                    need_satisfied_this_step = animal.thirst < thirst_before
                     self._record_water_event("herbivores", thirst_before, animal.thirst)
                 elif isinstance(resource, Plant) and resource.state == PlantState.MATURE and animal.hunger >= 20:
                     collected_plant = self.world.collect_resource(animal.x, animal.y)
                     if collected_plant is not None:
                         self._record_collection_event(collected_plant, "herbivore")
                         animal.eat(35.0)
+                        need_satisfied_this_step = True
             stamina_before_recovery = animal.needs.energy
             if activity == "RUNNING" and (animal.x, animal.y) != before_move:
                 animal.needs.energy = max(0.0, animal.needs.energy - self.physiology_config.stamina_run_cost)
@@ -1612,8 +1668,23 @@ class Simulation:
                 ),
                 "moved": (animal.x, animal.y) != before_pos,
                 "distance": float(abs(animal.x-before_pos[0])+abs(animal.y-before_pos[1])),
+                **_target_progress_fields(
+                    resource_target, resource_target_intent, before_pos, (animal.x, animal.y),
+                    need_satisfied=bool(
+                        (resource_target_intent == "SEEK_WATER" and need_satisfied_this_step and isinstance(resource, Water))
+                        or (resource_target_intent == "SEEK_FOOD" and need_satisfied_this_step and collected_plant is not None)
+                    ),
+                ),
                 "movement_block_reason": animal.last_movement_block_reason,
                 "navigation_block_reason": animal.last_navigation_block_reason,
+                "navigation_plan_status": animal.last_navigation_plan_status,
+                "navigation_plan_reason": animal.last_navigation_plan_reason,
+                "navigation_plan_path_found_attempts": animal.navigation_plan_status_counts.get("PATH_FOUND", 0),
+                "navigation_plan_already_at_goal_attempts": animal.navigation_plan_status_counts.get("ALREADY_AT_GOAL", 0),
+                "navigation_plan_temporarily_blocked_attempts": animal.navigation_plan_status_counts.get("TEMPORARILY_BLOCKED", 0),
+                "navigation_plan_invalid_start_attempts": animal.navigation_plan_status_counts.get("INVALID_START", 0),
+                "navigation_plan_invalid_goal_attempts": animal.navigation_plan_status_counts.get("INVALID_GOAL", 0),
+                "navigation_plan_unreachable_attempts": animal.navigation_plan_status_counts.get("UNREACHABLE", 0),
                 "stamina_before": before_state["stamina"], "stamina_after": animal.needs.energy,
                 "stamina_spent_movement": ((self.physiology_config.stamina_run_cost if activity == "RUNNING" else ENERGY_PER_STEP * abs(animal.x-before_pos[0])+ENERGY_PER_STEP * abs(animal.y-before_pos[1])) if activity in {"WALKING", "RUNNING"} else 0.0),
                 "stamina_recovered_rest": stamina_recovered_activity,
@@ -1645,6 +1716,17 @@ class Simulation:
         for carnivore in list(self.alive_carnivores):
             carnivore._sleep_interruption_event = ""
             before_pos = (carnivore.x, carnivore.y)
+            carnivore_target_before_action = getattr(carnivore, "target", None)
+            if carnivore_target_before_action is None:
+                # A patrulha usa exploration_target, enquanto target fica None.
+                # Capturamos o objetivo persistente para medir exploração real.
+                carnivore_target_before_action = getattr(carnivore, "exploration_target", None)
+                carnivore_target_intent_before_action = "EXPLORATION"
+            else:
+                target_resource = self.world.get_cell(*carnivore_target_before_action).resource
+                carnivore_target_intent_before_action = (
+                    "SEEK_WATER" if isinstance(target_resource, Water) else "HUNT"
+                )
             before_state = {
                 "health": carnivore.health, "hunger": carnivore.hunger,
                 "thirst": carnivore.thirst, "stamina": carnivore.needs.energy,
@@ -1742,7 +1824,7 @@ class Simulation:
                 # até três células por passo, seguindo o caminho calculado (não
                 # repetindo cegamente o mesmo vetor e colidindo com obstáculos).
                 can_sprint = carnivore.running and carnivore.needs.energy >= self.physiology_config.stamina_run_minimum
-                max_distance = 3 if can_sprint else 1
+                max_distance = carnivore.run_distance if can_sprint else 1
                 for path_index in range(1, max_distance + 1):
                     if carnivore.path and len(carnivore.path) > path_index and carnivore.path[0] == (before_pos[0], before_pos[1]):
                         next_position = carnivore.path[path_index]
@@ -1832,6 +1914,19 @@ class Simulation:
                     "EXPLORING" if activity in {"WALKING", "RUNNING"} else "NO_ACTION"
                 ),
                 "moved": displacement > 0, "distance": float(displacement),
+                **_target_progress_fields(
+                    carnivore_target_before_action, carnivore_target_intent_before_action,
+                    before_pos, (carnivore.x, carnivore.y),
+                    need_satisfied=bool(
+                        (carnivore_target_intent_before_action == "HUNT" and (
+                            bool(hunt_record.get("prey_killed", False))
+                            or float(hunt_record.get("hunger_reduction_from_meat", 0) or 0) > 0
+                        ))
+                        or (carnivore_target_intent_before_action == "SEEK_WATER"
+                            and isinstance(self.world.get_cell(carnivore.x, carnivore.y).resource, Water)
+                            and before_state["thirst"] > carnivore.thirst)
+                    ),
+                ),
                 "stamina_before": before_state["stamina"], "stamina_after": carnivore.needs.energy,
                 "stamina_spent_movement": carnivore_movement_stamina_spent,
                 "stamina_recovered_rest": stamina_recovered_activity,
@@ -1877,7 +1972,8 @@ class Simulation:
                 )
                 agent.consume_energy(self.physiology_config.stamina_attack_cost)
                 combat_stamina_spent[id(agent)] = combat_stamina_spent.get(id(agent), 0.0) + self.physiology_config.stamina_attack_cost
-                damage_taken = target.needs.damage(20.0, cause="DEFENSE")
+                defense_damage = 20.0 * agent.attributes.relative_multiplier(agent.species, "strength", strength=0.5)
+                damage_taken = target.needs.damage(defense_damage, cause="DEFENSE")
                 diagnostic = carnivore_diagnostics_this_step.get(id(target))
                 if diagnostic is not None:
                     diagnostic["defense_attacks_received"] = int(diagnostic["defense_attacks_received"]) + 1
@@ -1925,7 +2021,9 @@ class Simulation:
                     diagnostic["attack_skipped_reason"] = "ATTACKED"
             if carnivore.hunger < 30.0 or carnivore.needs.energy < self.physiology_config.stamina_attack_cost or target is None:
                 continue
-            damage = CARNIVORE_ATTACK_DAMAGE
+            damage = CARNIVORE_ATTACK_DAMAGE * carnivore.attributes.relative_multiplier(
+                carnivore.species, "strength", strength=0.5
+            )
             if isinstance(target, Agent) and isinstance(
                 self.world.get_cell(target.x, target.y).structure, Shelter
             ):

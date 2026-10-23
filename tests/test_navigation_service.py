@@ -1,8 +1,9 @@
 """Testes do contrato de navegação compartilhado entre espécies."""
 import random
 
-from agents.navigation.service import NavigationService
+from agents.navigation.service import NavigationService, NavigationStatus
 from environment.obstacles import ObstacleType
+from environment.resources import Plant, PlantState
 from environment.world import World
 
 
@@ -69,3 +70,64 @@ def test_custom_pathfinder_route_is_rejected_if_it_crosses_dynamic_blocker():
     assert service.find_path(
         world, (1, 1), (3, 1), blocked_positions={(2, 1)}
     ) is None
+
+
+
+def test_plan_route_distinguishes_invalid_goal_from_temporary_occupancy():
+    world = empty_world()
+    service = NavigationService()
+    world.get_cell(3, 2).obstacle = ObstacleType.ROCK
+
+    invalid = service.plan_route(world, (1, 2), (3, 2))
+    occupied = service.plan_route(
+        world, (1, 2), (5, 2), blocked_positions={(5, 2)}
+    )
+
+    assert invalid.status is NavigationStatus.INVALID_GOAL
+    assert invalid.reason == "GOAL_NOT_WALKABLE"
+    assert occupied.status is NavigationStatus.TEMPORARILY_BLOCKED
+    assert occupied.reason == "GOAL_OCCUPIED"
+
+
+def test_plan_route_distinguishes_dynamic_blockage_from_static_unreachable_goal():
+    world = empty_world(width=5, height=5)
+    service = NavigationService()
+    # Bloqueio dinâmico de todas as saídas do início.
+    dynamic = service.plan_route(
+        world, (2, 2), (4, 2), blocked_positions={(2, 1), (2, 3), (1, 2), (3, 2)}
+    )
+    # Uma parede estática separa o destino do início.
+    for y in range(world.height):
+        world.get_cell(3, y).obstacle = ObstacleType.ROCK
+    static = service.plan_route(world, (1, 2), (4, 2))
+
+    assert dynamic.status is NavigationStatus.TEMPORARILY_BLOCKED
+    assert static.status is NavigationStatus.UNREACHABLE
+
+
+def test_plan_route_reports_already_at_goal_and_out_of_bounds():
+    world = empty_world()
+    service = NavigationService()
+
+    arrived = service.plan_route(world, (2, 2), (2, 2))
+    invalid = service.plan_route(world, (2, 2), (99, 2))
+
+    assert arrived.status is NavigationStatus.ALREADY_AT_GOAL
+    assert arrived.path == [(2, 2)]
+    assert invalid.status is NavigationStatus.INVALID_GOAL
+    assert invalid.reason == "OUT_OF_BOUNDS"
+
+
+def test_navigation_can_leave_a_start_cell_that_became_non_walkable():
+    """A célula inicial pode deixar de ser transitável enquanto o agente está nela."""
+    world = empty_world()
+    world.get_cell(1, 2).resource = Plant(state=PlantState.GROWING)
+    service = NavigationService()
+
+    result = service.plan_route(world, (1, 2), (5, 2))
+
+    assert result.status.name == "PATH_FOUND"
+    assert result.path is not None
+    assert result.path[0] == (1, 2)
+    assert result.path[-1] == (5, 2)
+    assert (1, 2) in result.path

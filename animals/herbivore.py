@@ -4,22 +4,38 @@ from __future__ import annotations
 import random
 from random import Random
 
-from agents.navigation.service import NavigationService
+from agents.navigation.service import NavigationService, NavigationStatus
+from agents.target_selector import TargetSelector
 from agents.needs import AgentNeeds
+from agents.attributes import IndividualAttributes, IndividualGenotype
+from agents.species import Species
 from environment.resources import Plant, PlantState, Water
 from environment.world import World
 
 
 class Herbivore:
     def __init__(self, x: int, y: int, *, vision_radius: int = 4,
-                 needs: AgentNeeds | None = None, rng: Random | None = None):
+                 needs: AgentNeeds | None = None, rng: Random | None = None,
+                 attributes: IndividualAttributes | None = None,
+                 genotype: IndividualGenotype | None = None):
         if vision_radius < 0:
             raise ValueError("vision_radius não pode ser negativo")
         self.x, self.y = x, y
-        self.vision_radius = vision_radius
+        self.species = Species.HERBIVORE
+        self.genotype = genotype if genotype is not None else (
+            IndividualGenotype.from_attributes(attributes) if attributes is not None
+            else IndividualGenotype.species_founder(self.species, (rng if rng is not None else random), variation=0.0)
+        )
+        self.attributes = attributes if attributes is not None else IndividualAttributes.from_genotype(self.genotype)
+        self.vision_radius = (self.attributes.adjusted_radius(self.species, vision_radius)
+                              if attributes is not None else vision_radius)
+        self.run_distance = 2 if self.attributes.agility >= 0.5 else 1
+        constitution = self.attributes.relative_multiplier(self.species, "constitution")
+        endurance = self.attributes.relative_multiplier(self.species, "endurance")
         self.needs = needs if needs is not None else AgentNeeds(
-            max_energy=60.0, energy=60.0, hunger=25.0, thirst=20.0,
-            hunger_per_step=0.3, thirst_per_step=0.2,
+            max_health=100.0 * constitution, health=100.0 * constitution,
+            max_energy=60.0 * endurance, energy=60.0 * endurance,
+            hunger=25.0, thirst=20.0, hunger_per_step=0.3, thirst_per_step=0.2,
         )
         self.alive = self.needs.alive
         self.is_sleeping = False
@@ -35,7 +51,11 @@ class Herbivore:
         # impedimento detectado durante o planejamento dinâmico são distintos.
         self.last_movement_block_reason = ""
         self.last_navigation_block_reason = ""
+        self.last_navigation_plan_status = ""
+        self.last_navigation_plan_reason = ""
+        self.navigation_plan_status_counts: dict[str, int] = {}
         self.navigation = NavigationService()
+        self.target_selector = TargetSelector()
 
     @property
     def health(self) -> float:
@@ -68,6 +88,9 @@ class Herbivore:
     ) -> tuple[int, int]:
         """Escolhe fuga ou recurso considerando a ocupação dinâmica do mundo."""
         self.last_navigation_block_reason = ""
+        self.last_navigation_plan_status = ""
+        self.last_navigation_plan_reason = ""
+        self.navigation_plan_status_counts = {}
         if not self.alive:
             return (0, 0)
 
@@ -132,6 +155,62 @@ class Herbivore:
                 set(candidates),
                 key=lambda p: (abs(p[0]-self.x)+abs(p[1]-self.y), p[1], p[0]),
             )
+
+            if kind == "WATER":
+                # O seletor coordena a ordem dos candidatos e o serviço de
+                # navegação fornece um resultado explícito para cada tentativa.
+                # A prioridade por sede continua sendo definida pela política acima.
+                selection = self.target_selector.select_reachable_target(
+                    world,
+                    current,
+                    candidates,
+                    self.navigation,
+                    blocked_positions=blocked,
+                )
+                for attempt in selection.attempts:
+                    result = attempt.navigation
+                    status_name = result.status.name
+                    self.last_navigation_plan_status = status_name
+                    self.last_navigation_plan_reason = result.reason
+                    self.navigation_plan_status_counts[status_name] = (
+                        self.navigation_plan_status_counts.get(status_name, 0) + 1
+                    )
+
+                    if attempt.blocked_steps:
+                        self.last_navigation_block_reason = (
+                            self.last_navigation_block_reason
+                            or classify_block(attempt.blocked_steps[0])
+                        )
+
+                    if not result.succeeded:
+                        if result.status is NavigationStatus.TEMPORARILY_BLOCKED:
+                            if attempt.target in blocked:
+                                block_reason = classify_block(attempt.target)
+                            else:
+                                block_reason = (
+                                    classify_block(attempt.blocked_steps[0])
+                                    if attempt.blocked_steps else "OBSTACLE"
+                                )
+                        else:
+                            block_reason = "OBSTACLE"
+                        self.last_navigation_block_reason = (
+                            self.last_navigation_block_reason or block_reason
+                        )
+
+                if selection.succeeded:
+                    target = selection.target
+                    path = selection.navigation.path or []
+                    self.target = target
+                    self.path = path
+                    next_action = self.navigation.next_step(path, current)
+                    if next_action is not None:
+                        return next_action
+                    # Já está na fonte: permanece para beber no ciclo atual.
+                    return (0, 0)
+                continue
+
+            # O piloto é deliberadamente restrito à busca por água. A navegação
+            # de alimento mantém o fluxo anterior nesta etapa.
             for target in candidates:
                 if target in blocked:
                     self.last_navigation_block_reason = self.last_navigation_block_reason or classify_block(target)
@@ -149,12 +228,12 @@ class Herbivore:
                 if not path:
                     self.last_navigation_block_reason = self.last_navigation_block_reason or "OBSTACLE"
                     continue
+
                 self.target = target
                 self.path = path
                 next_action = self.navigation.next_step(path, current)
                 if next_action is not None:
                     return next_action
-                # Já está no recurso: permanece para beber/comer no ciclo atual.
                 return (0, 0)
 
         # Não mantém um alvo que foi provado inalcançável no estado dinâmico

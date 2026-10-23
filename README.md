@@ -212,3 +212,14 @@ O pipeline paralelo e a descrição dos CSVs estão em `docs/ecosystem_audit.md`
 ## Shared navigation contract
 
 See [`docs/NAVIGATION_SERVICE.md`](docs/NAVIGATION_SERVICE.md) for the route-planning contract shared by humans, herbivores, and carnivores.
+
+## Escala do mundo e capacidade vegetal
+
+`configuration/simulation_config.py` concentra as densidades iniciais de plantas, água, obstáculos, madeira e pedra. As quantidades iniciais são derivadas da área (`width * height`) multiplicada pela densidade de cada recurso; ao mudar as dimensões, as densidades permanecem constantes, salvo configuração explícita.
+
+O limite de plantas regeneradas também é proporcional à área e usa uma referência configurável: por padrão, 300 plantas para um mundo de 60×60. A capacidade padrão é calculada por `SimulationConfig.max_plants_capacity`; por exemplo, 80×80 resulta em 533, 100×100 em 833 e 200×200 em 3333. `max_plants` explícito continua disponível para experimentos que precisam controlar essa variável deliberadamente. O manifesto da auditoria registra a referência e a capacidade efetiva.
+
+
+## Atributos individuais
+
+O modelo inicial de atributos biológicos, perfis por espécie, variação individual e capacidades derivadas está documentado em [`docs/AGENT_ATTRIBUTES.md`](docs/AGENT_ATTRIBUTES.md). A variação pode ser controlada por `SimulationConfig.attribute_variation` ou pela opção `--attribute-variation` da auditoria.

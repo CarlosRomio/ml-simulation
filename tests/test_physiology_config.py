@@ -169,3 +169,34 @@ def test_carnivore_attack_spends_stamina_and_requires_reserve():
     simulation2.step()
     assert simulation2.carnivore_attacks == 0
     assert human2.alive
+
+
+def test_plant_capacity_is_derived_from_world_area_and_reference_calibration():
+    baseline = SimulationConfig(width=60, height=60)
+    assert baseline.max_plants_capacity == 300
+    assert SimulationConfig(width=80, height=80).max_plants_capacity == 533
+    assert SimulationConfig(width=100, height=100).max_plants_capacity == 833
+    assert SimulationConfig(width=200, height=200).max_plants_capacity == 3333
+    assert SimulationConfig(width=120, height=60).max_plants_capacity == 600
+
+
+def test_plant_capacity_reference_can_be_changed_explicitly():
+    config = SimulationConfig(
+        width=60,
+        height=60,
+        plant_cap_reference_width=30,
+        plant_cap_reference_height=30,
+        plant_cap_reference_max=100,
+    )
+    config.validate()
+    assert config.max_plants_capacity == 400
+
+
+def test_invalid_plant_capacity_reference_is_rejected():
+    config = SimulationConfig(width=10, height=10, plant_cap_reference_width=0)
+    try:
+        config.validate()
+    except ValueError as exc:
+        assert "referência" in str(exc)
+    else:
+        raise AssertionError("Era esperado rejeitar uma dimensão de referência inválida.")

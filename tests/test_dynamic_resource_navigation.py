@@ -5,7 +5,7 @@ from agents.navigation.bfs import find_path
 from environment.resources import Water
 from environment.world import World
 from simulation.simulation import Simulation
-from run_ecosystem_audit import _is_audit_event
+from run_ecosystem_audit import _is_audit_event, _resource_access_summary
 
 
 def empty_world(width=7, height=7):
@@ -131,6 +131,12 @@ def test_herbivore_selects_alternative_water_source_when_nearest_is_occupied():
     assert herbivore.target == alternative_water
     assert herbivore.path[-1] == alternative_water
     assert herbivore.last_navigation_block_reason == "ANIMAL"
+    # A tentativa bloqueada não desaparece do diagnóstico quando uma fonte
+    # alternativa é encontrada no mesmo passo.
+    assert herbivore.navigation_plan_status_counts == {
+        "TEMPORARILY_BLOCKED": 1,
+        "PATH_FOUND": 1,
+    }
 
 
 def test_herbivore_movement_records_actual_animal_block():
@@ -155,3 +161,60 @@ def test_herbivore_movement_records_actual_animal_block():
     assert moved is False
     assert herbivore.last_movement_block_reason == "ANIMAL"
     assert (herbivore.x, herbivore.y) == (1, 2)
+
+
+def test_herbivore_water_search_uses_explicit_navigation_contract():
+    from animals.herbivore import Herbivore
+
+    world = empty_world()
+    target = (5, 2)
+    world.get_cell(*target).resource = Water()
+    herbivore = Herbivore(1, 2, vision_radius=6, rng=random.Random(27))
+    herbivore.needs.thirst = 70.0
+    calls = []
+    original_plan_route = herbivore.navigation.plan_route
+
+    def tracked_plan_route(world_arg, start, goal, *, blocked_positions=None):
+        calls.append((start, goal, set(blocked_positions or ())))
+        return original_plan_route(
+            world_arg, start, goal, blocked_positions=blocked_positions
+        )
+
+    herbivore.navigation.plan_route = tracked_plan_route
+    herbivore.choose_action(
+        world,
+        [],
+        occupied_positions={(2, 2)},
+        occupied_animal_positions={(2, 2)},
+    )
+
+    assert calls
+    assert calls[0][1] == target
+    assert calls[0][2] == {(2, 2)}
+    assert herbivore.target == target
+    assert (2, 2) not in herbivore.path
+
+
+
+def test_resource_access_summary_counts_navigation_plan_attempts_not_only_last_status():
+    records = [
+        {
+            "individual_type": "HERBIVORE",
+            "navigation_plan_path_found_attempts": 1,
+            "navigation_plan_temporarily_blocked_attempts": 1,
+            "navigation_plan_unreachable_attempts": 0,
+        },
+        {
+            "individual_type": "HERBIVORE",
+            "navigation_plan_path_found_attempts": 2,
+            "navigation_plan_temporarily_blocked_attempts": 0,
+            "navigation_plan_unreachable_attempts": 1,
+        },
+    ]
+
+    summary = _resource_access_summary(1, 7200, records)
+    herbivore = next(row for row in summary if row["individual_type"] == "HERBIVORE")
+
+    assert herbivore["navigation_plan_path_found_attempts"] == 3
+    assert herbivore["navigation_plan_temporarily_blocked_attempts"] == 1
+    assert herbivore["navigation_plan_unreachable_attempts"] == 1

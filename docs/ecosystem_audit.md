@@ -22,6 +22,29 @@ py -3.13 run_ecosystem_audit.py --profile full --workers 4
 
 Configuração: 30 execuções com sementes independentes, mundo 60×60, 20 humanos, 40 herbívoros, 8 carnívoros, 3.000 passos (50 horas simuladas por execução). O processo usa quatro workers por padrão; aumente apenas se houver memória disponível.
 
+### Comparação de dimensões do mundo
+
+`--width` e `--height` permitem alterar o tamanho do mapa sem mudar a população nem as densidades de recursos do perfil. Como comida, água, obstáculos, madeira e pedra são calculados por densidade relativa à área, suas quantidades aumentam proporcionalmente ao tamanho do mundo.
+
+O limite de plantas também acompanha a área. A referência é a configuração histórica de 60×60 com `max_plants=300`, isto é, uma capacidade de 300 / 3.600 = 0,08333 unidades de capacidade por célula. Quando `--max-plants` não é informado, o auditor calcula:
+
+```text
+max_plants = round(300 * (width * height) / (60 * 60))
+```
+
+Isso resulta em 300 para 60×60, 533 para 80×80, 833 para 100×100 e 3.333 para 200×200. A fórmula não afirma que essa densidade é ecologicamente ideal; ela mantém constante a capacidade por área para isolar melhor o efeito da escala espacial. A referência pode ser recalibrada posteriormente usando dados de regeneração, consumo e disponibilidade de habitat. Para um experimento que precise de um limite explícito, use `--max-plants N`; o valor e a política ficam registrados em `manifest.json`.
+
+Para comparar 60×60, 80×80, 100×100 ou outras dimensões com a mesma população, sementes e duração:
+
+```powershell
+py -3.13 run_ecosystem_audit.py --profile full --runs 8 --steps 3000 --seed 7200 --workers 4 --sample-every 20 --width 60 --height 60 --output results/ecosystem_audit_world_60
+py -3.13 run_ecosystem_audit.py --profile full --runs 8 --steps 3000 --seed 7200 --workers 4 --sample-every 20 --width 80 --height 80 --output results/ecosystem_audit_world_80
+py -3.13 run_ecosystem_audit.py --profile full --runs 8 --steps 3000 --seed 7200 --workers 4 --sample-every 20 --width 100 --height 100 --output results/ecosystem_audit_world_100
+py -3.13 run_ecosystem_audit.py --profile full --runs 8 --steps 3000 --seed 7200 --workers 4 --sample-every 20 --width 200 --height 200 --output results/ecosystem_audit_world_200
+```
+
+Use as mesmas sementes e parâmetros nas três auditorias. Compare encontros, deslocamentos, latência de acesso à água e alimento, causas de morte, distribuição populacional e tempo computacional. O perfil `full` continua usando 60×60 por padrão para preservar a linha de base histórica; o novo tamanho só é aplicado quando informado explicitamente.
+
 ### Teste de escala com menos dados brutos
 
 ```powershell

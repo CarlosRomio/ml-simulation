@@ -6,6 +6,7 @@ from random import Random
 from agents.agent import Agent
 from agents.needs import AgentNeeds
 from agents.species import Species
+from agents.attributes import IndividualAttributes, IndividualGenotype
 from agents.cognition import Personality
 from environment.world import World
 
@@ -25,6 +26,7 @@ class AgentFactory:
         hunger_per_step: float = 0.25,
         starvation_threshold: float = 90.0,
         starvation_damage_per_step: float | None = None,
+        attribute_variation: float = 0.12,
     ) -> list[Agent]:
         """Cria agentes com espécie e parâmetros fisiológicos configuráveis.
 
@@ -74,7 +76,18 @@ class AgentFactory:
         agents = []
         for index, (x, y) in enumerate(positions):
             agent_seed = None if seed is None else seed + 1_000_003 * (index + 1)
+            attributes_rng = random.Random(None if agent_seed is None else agent_seed + 531_771)
+            genotype = IndividualGenotype.species_founder(
+                Species.HUMAN, attributes_rng, variation=attribute_variation
+            )
+            attributes = genotype.express()
+            constitution_scale = attributes.relative_multiplier(Species.HUMAN, "constitution")
+            endurance_scale = attributes.relative_multiplier(Species.HUMAN, "endurance")
             needs = AgentNeeds(
+                max_health=100.0 * constitution_scale,
+                health=100.0 * constitution_scale,
+                max_energy=100.0 * endurance_scale,
+                energy=100.0 * endurance_scale,
                 hunger_per_step=needs_template.hunger_per_step,
                 thirst_per_step=needs_template.thirst_per_step,
                 starvation_threshold=needs_template.starvation_threshold,
@@ -97,6 +110,8 @@ class AgentFactory:
                     needs=needs,
                     species=species,
                     personality=personality,
+                    attributes=attributes,
+                    genotype=genotype,
                     agent_id=f"H{index + 1:03d}",
                 )
             )

@@ -1,18 +1,20 @@
 import random
 
 from random import Random
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 
 from environment.cell import Cell
 from environment.world import World
 from agents.navigation.bfs import find_path
 from agents.navigation.service import NavigationService
+from agents.target_selector import TargetSelector
 from agents.needs import AgentNeeds
 from environment.resources import MaterialKind, MaterialResource, Water, Plant, Food
 from environment.storage import Storage
 from environment.shelter import Shelter
 from agents.inventory import Inventory
 from agents.species import Species
+from agents.attributes import IndividualAttributes, IndividualGenotype
 from agents.cognition import ActionCandidate, DecisionEngine, ExperienceMemory, Personality
 
 
@@ -38,6 +40,8 @@ class Agent:
         sociability: float | None = None,
         agent_id: str | None = None,
         personality: Personality | None = None,
+        attributes: IndividualAttributes | None = None,
+        genotype: IndividualGenotype | None = None,
     ):
         if vision_radius < 0:
             raise ValueError("vision_radius não pode ser negativo")
@@ -48,6 +52,11 @@ class Agent:
         # Identificador legível, atribuído pela simulação se não for fornecido.
         self.agent_id = agent_id
         self.species = Species(species)
+        self.genotype = genotype if genotype is not None else (
+            IndividualGenotype.from_attributes(attributes) if attributes is not None
+            else IndividualGenotype.species_founder(self.species, self.rng, variation=0.0)
+        )
+        self.attributes = attributes if attributes is not None else IndividualAttributes.from_genotype(self.genotype)
         self.hunt_target: Position | None = None
         self.running = False
         self.last_activity = "WAITING"
@@ -58,6 +67,7 @@ class Agent:
         self._sleep_interruption_event = ""
 
         self.target: Position | None = None
+        self.target_selector = TargetSelector()
         self.path: list[Position] = []
         # Intenção operacional do alvo atual, preservada mesmo se o recurso-alvo
         # for coletado por outro agente enquanto este humano se desloca.
@@ -65,12 +75,19 @@ class Agent:
         self.last_behavior_intent = "UNCLASSIFIED"
 
         self.needs = needs if needs is not None else AgentNeeds(
-            max_energy=max_energy,
-            energy=max_energy,
+            max_health=100.0 * self.attributes.relative_multiplier(self.species, "constitution"),
+            health=100.0 * self.attributes.relative_multiplier(self.species, "constitution"),
+            max_energy=max_energy * self.attributes.relative_multiplier(self.species, "endurance"),
+            energy=max_energy * self.attributes.relative_multiplier(self.species, "endurance"),
         )
         self.alive = self.needs.alive
 
-        self.vision_radius = vision_radius
+        self.vision_radius = (
+            self.attributes.adjusted_radius(self.species, vision_radius)
+            if attributes is not None else vision_radius
+        )
+        # A corrida pode cobrir uma ou duas células conforme a agilidade individual.
+        self.run_distance = 2 if self.attributes.agility >= 0.5 else 1
         self.visit_counts: dict[Position, int] = {}
 
         self.inventory = inventory if inventory is not None else Inventory()
@@ -211,6 +228,9 @@ class Agent:
         nearby_cells: list[Cell],
         world: World,
         pathfinder: Pathfinder,
+        *,
+        navigation_service: NavigationService | None = None,
+        blocked_positions: Collection[Position] | None = None,
     ) -> None:
         current_position = (self.x, self.y)
         self.building_intent = False
@@ -468,36 +488,22 @@ class Agent:
         # As necessidades básicas e a exploração agora competem no mesmo
         # seletor cognitivo. A elegibilidade física continua explícita; o
         # seletor compara apenas ações que podem realmente ser executadas.
-        self._select_needs_or_exploration_target(world, pathfinder, current_position)
-
-    def _nearest_reachable_target(
-        self,
-        world: World,
-        pathfinder: Pathfinder,
-        current_position: Position,
-        positions: list[Position],
-    ) -> tuple[Position, list[Position]] | None:
-        """Retorna o alvo alcançável mais próximo, usando distância Manhattan como pré-filtro."""
-        ordered = sorted(
-            set(positions),
-            key=lambda position: (
-                abs(position[0] - self.x) + abs(position[1] - self.y),
-                position[1], position[0],
-            ),
+        self._select_needs_or_exploration_target(
+            world,
+            pathfinder,
+            current_position,
+            navigation_service=navigation_service,
+            blocked_positions=blocked_positions,
         )
-        for position in ordered:
-            if position == current_position:
-                continue
-            path = pathfinder(world, current_position, position)
-            if path is not None and len(path) > 1:
-                return position, path
-        return None
 
     def _select_needs_or_exploration_target(
         self,
         world: World,
         pathfinder: Pathfinder,
         current_position: Position,
+        *,
+        navigation_service: NavigationService | None = None,
+        blocked_positions: Collection[Position] | None = None,
     ) -> None:
         """Compara busca de alimento/água, repouso e exploração em uma decisão."""
         candidates: list[ActionCandidate] = []
@@ -511,8 +517,8 @@ class Agent:
             and self.can_collect_resource(cell.resource)
             and (cell.x, cell.y) != current_position
         ]
-        food_target = self._nearest_reachable_target(
-            world, pathfinder, current_position, food_positions
+        food_target = self.target_selector.nearest_reachable_target(
+            world, current_position, food_positions, pathfinder
         )
         if food_target is not None:
             target, path = food_target
@@ -538,25 +544,39 @@ class Agent:
         # moderada, mas sua urgência cresce continuamente com a necessidade.
         thirst_need = self.thirst / max(1.0, self.needs.max_thirst)
         if self.thirst >= 12.0:
-            water_target = self._nearest_reachable_target(
-                world, pathfinder, current_position, world.get_water_positions()
+            # A política cognitiva continua decidindo se SEEK_WATER é atraente;
+            # o contrato compartilhado cuida apenas de selecionar uma fonte
+            # alcançável e explicitar o resultado do planejamento.
+            water_selection = self.target_selector.select_reachable_target(
+                world,
+                current_position,
+                (
+                    position
+                    for position in world.get_water_positions()
+                    if position != current_position
+                ),
+                navigation_service or NavigationService(pathfinder),
+                blocked_positions=blocked_positions,
+                capture_static_path=False,
             )
-            if water_target is not None:
-                target, path = water_target
-                distance = max(0, len(path) - 1)
-                proximity = max(0.0, 1.0 - distance / distance_scale)
-                candidates.append(ActionCandidate(
-                    action_id="SEEK_WATER",
-                    intent="SEEK_WATER",
-                    expected_benefit=min(1.0, 0.28 + 0.62 * thirst_need),
-                    urgency=thirst_need,
-                    opportunity=proximity,
-                    cost=min(1.0, distance / distance_scale) * 0.30,
-                    risk=min(1.0, distance / distance_scale) * 0.25,
-                    continues_current_goal=self.target_intent == "SEEK_WATER",
-                    target=target,
-                    metadata={"path": path, "distance": distance},
-                ))
+            if water_selection.succeeded and water_selection.navigation is not None:
+                target = water_selection.target
+                path = water_selection.navigation.path
+                if target is not None and path is not None:
+                    distance = max(0, len(path) - 1)
+                    proximity = max(0.0, 1.0 - distance / distance_scale)
+                    candidates.append(ActionCandidate(
+                        action_id="SEEK_WATER",
+                        intent="SEEK_WATER",
+                        expected_benefit=min(1.0, 0.28 + 0.62 * thirst_need),
+                        urgency=thirst_need,
+                        opportunity=proximity,
+                        cost=min(1.0, distance / distance_scale) * 0.30,
+                        risk=min(1.0, distance / distance_scale) * 0.25,
+                        continues_current_goal=self.target_intent == "SEEK_WATER",
+                        target=target,
+                        metadata={"path": path, "distance": distance},
+                    ))
 
         current_cell = world.get_cell(*current_position)
         in_shelter = isinstance(current_cell.structure, Shelter)
@@ -734,6 +754,10 @@ class Agent:
         # atual. A ocupação muda a cada passo, então esta visão é recalculada
         # pelo chamador antes de cada decisão.
         dynamic_blocked_positions: set[Position] | None = None
+        # Mantém um serviço com o pathfinder original. A seleção de água recebe
+        # os bloqueios explicitamente, para que o serviço possa distinguir uma
+        # rota bloqueada temporariamente de uma impossibilidade estrutural.
+        navigation_service = NavigationService(pathfinder)
         if pathfinder is find_path and self.occupied_positions:
             dynamic_blocked_positions = set(self.occupied_positions)
             dynamic_blocked_positions.discard(current_position)
@@ -844,6 +868,8 @@ class Agent:
                 nearby_cells,
                 world,
                 pathfinder,
+                navigation_service=navigation_service,
+                blocked_positions=dynamic_blocked_positions,
             )
             if self._rest_selected:
                 return (0, 0)

@@ -5,20 +5,36 @@ import random
 from random import Random
 
 from agents.navigation.service import NavigationService
+from agents.target_selector import TargetSelector
 from agents.needs import AgentNeeds
+from agents.attributes import IndividualAttributes, IndividualGenotype
+from agents.species import Species
 from environment.resources import Water
 from environment.world import World
 
 
 class Carnivore:
     def __init__(self, x: int, y: int, *, vision_radius: int = 5,
-                 needs: AgentNeeds | None = None, rng: Random | None = None):
+                 needs: AgentNeeds | None = None, rng: Random | None = None,
+                 attributes: IndividualAttributes | None = None,
+                 genotype: IndividualGenotype | None = None):
         if vision_radius < 0:
             raise ValueError("vision_radius não pode ser negativo")
         self.x, self.y = x, y
-        self.vision_radius = vision_radius
+        self.species = Species.CARNIVORE
+        self.genotype = genotype if genotype is not None else (
+            IndividualGenotype.from_attributes(attributes) if attributes is not None
+            else IndividualGenotype.species_founder(self.species, (rng if rng is not None else random), variation=0.0)
+        )
+        self.attributes = attributes if attributes is not None else IndividualAttributes.from_genotype(self.genotype)
+        self.vision_radius = (self.attributes.adjusted_radius(self.species, vision_radius)
+                              if attributes is not None else vision_radius)
+        self.run_distance = 3 if self.attributes.agility >= 0.5 else 2
+        constitution = self.attributes.relative_multiplier(self.species, "constitution")
+        endurance = self.attributes.relative_multiplier(self.species, "endurance")
         self.needs = needs if needs is not None else AgentNeeds(
-            max_health=120.0, health=120.0, max_energy=80.0, energy=80.0,
+            max_health=120.0 * constitution, health=120.0 * constitution,
+            max_energy=80.0 * endurance, energy=80.0 * endurance,
             hunger=35.0, thirst=20.0, hunger_per_step=0.3, thirst_per_step=0.2,
         )
         self.alive = self.needs.alive
@@ -36,6 +52,7 @@ class Carnivore:
         self._recent_positions: list[tuple[int, int]] = []
         self.kills = 0
         self.navigation = NavigationService()
+        self.target_selector = TargetSelector()
 
     @property
     def health(self) -> float:
@@ -79,14 +96,34 @@ class Carnivore:
             candidates = world.get_water_positions()
             seeking_water = bool(candidates)
 
-        if candidates:
+        if candidates and seeking_water:
+            # A política do carnívoro continua priorizando água a partir dos
+            # limiares existentes (50 e, como fallback, 35). O contrato apenas
+            # seleciona uma fonte alcançável e devolve a rota; não reordena a
+            # prioridade entre hidratação e caça. Não capturamos um caminho
+            # estático separado, evitando executar BFS duas vezes por fonte.
+            selection = self.target_selector.select_reachable_target(
+                world,
+                here,
+                candidates,
+                self.navigation,
+                capture_static_path=False,
+            )
+            if selection.succeeded and selection.target is not None and selection.navigation is not None:
+                self.target = selection.target
+                self.path = selection.navigation.path or []
+                self.exploration_target = None
+                next_action = self.navigation.next_step(self.path, here)
+                if next_action is not None:
+                    return next_action
+        elif candidates:
+            # A perseguição de presas permanece específica do carnívoro: ao
+            # ficar adjacente, aguarda o sistema de combate em vez de ocupar
+            # a célula da presa.
             candidates.sort(key=lambda p: (abs(p[0]-self.x)+abs(p[1]-self.y), p[1], p[0]))
             for target in candidates:
                 distance = abs(target[0] - self.x) + abs(target[1] - self.y)
-                # Ao detectar uma presa, interrompe a patrulha e passa a persegui-la.
-                # Presas são ocupadas: ao ficar adjacente, aguarda o sistema de combate.
-                # Água precisa ser alcançada de fato.
-                if distance == 0 or (distance == 1 and not seeking_water):
+                if distance == 0 or distance == 1:
                     self.target, self.path = target, []
                     self.exploration_target = None
                     return (0, 0)

@@ -54,7 +54,7 @@ Esta lista é um mapa funcional, não uma proposta para reordenar as fases. A pr
 
 - A busca por água entra na lista de candidatos quando `thirst >= 12` em `_select_needs_or_exploration_target()` (`agents/agent.py`).
 - Água compete com alimento, descanso, sono, espera e exploração por meio de `DecisionEngine` e `ActionCandidate`.
-- O alvo de água é escolhido por `_nearest_reachable_target()` e uma rota é guardada no estado do agente.
+- O alvo de água é escolhido por `TargetSelector.nearest_reachable_target()` (`agents/target_selector.py`), que ordena e valida candidatos antes de consultar o serviço de navegação; a rota é guardada no estado do agente.
 - A persistência é representada em parte por `target_intent`/`continues_current_goal`; ainda existem regras adicionais de limpeza/reavaliação de alvo em outras partes de `Agent`.
 - A simulação prepara `occupied_positions` para os humanos; o movimento é resolvido centralmente.
 
@@ -114,7 +114,7 @@ Pontos que merecem investigação:
 
 5. **Parâmetros de comportamento dispersos:** limiares como sede humana 12, sede herbívora 45, sede carnívora 50/35 e fome carnívora 30 estão codificados nas políticas. Não devem necessariamente ser iguais, mas devem ser nomeados, documentados e configuráveis por política.
 6. **Estado interno mutável entre camadas:** `Simulation` escreve atributos dos agentes, incluindo campos internos com `_`, como `_sleep_blocked_this_step`. Isso cria dependências implícitas entre orquestrador e entidades. Preferir contexto explícito de decisão/resultado e métodos de transição bem definidos.
-7. **Módulos vazios:** `agents/target_selector.py`, `agents/navigation/pathfinder.py`, `agents/policies/rule_based_policy.py`, `agents/policies/random_policy.py`, `visualization/input_handler.py` e `visualization/simulation_controller.py` estão vazios no pacote inspecionado. Antes de preenchê-los, decidir se são os pontos de extensão pretendidos ou se devem ser removidos para evitar uma arquitetura aspiracional duplicada.
+7. **Módulos vazios:** `agents/navigation/pathfinder.py`, `agents/policies/rule_based_policy.py`, `agents/policies/random_policy.py`, `visualization/input_handler.py` e `visualization/simulation_controller.py` estavam vazios no pacote inspecionado. `agents/target_selector.py` foi preenchido na etapa seguinte para isolar a seleção/validação de objetivos; os demais módulos ainda precisam de decisão explícita antes de serem preenchidos ou removidos.
 8. **Testes sem `assert` direto:** uma varredura sintática encontrou funções de teste sem `assert` explícito; várias podem ser testes de exceção via `pytest.raises`, portanto isso não é automaticamente um defeito. A revisão deve verificar que cada teste valida um resultado ou uma exceção e remover testes que apenas executam código.
 
 ### Desempenho e reprodutibilidade

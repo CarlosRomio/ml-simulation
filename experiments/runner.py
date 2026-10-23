@@ -103,11 +103,17 @@ def run_single_simulation(
     max_steps: int,
     scenario: Scenario | None = None,
     seed_spawn_count: int = 1,
-    max_plants: int = 100,
+    max_plants: int | None = None,
     social_behavior_enabled: bool = True,
     social_memory_enabled: bool = True,
 ) -> SimulationRunResult:
     """Executa uma simulação e retorna métricas do agente e do ambiente."""
+    config.validate()
+    if max_plants is None:
+        max_plants = config.max_plants_capacity
+    elif max_plants < 0:
+        raise ValueError("max_plants não pode ser negativo.")
+
     rng = random.Random(run_seed)
 
     if scenario is None:
@@ -142,6 +148,7 @@ def run_single_simulation(
         dehydration_threshold=config.dehydration_threshold,
         starvation_damage_per_step=config.starvation_damage_per_step,
         dehydration_damage_per_step=config.dehydration_damage_per_step,
+        attribute_variation=config.attribute_variation,
     )
 
     occupied_positions = {(agent.x, agent.y) for agent in agents}
@@ -151,6 +158,7 @@ def run_single_simulation(
         vision_radius=config.vision_radius,
         seed=run_seed + 4_000_000,
         occupied_positions=occupied_positions,
+        attribute_variation=config.attribute_variation,
     )
     occupied_positions.update((animal.x, animal.y) for animal in herbivores)
     carnivores = CarnivoreFactory.create(
@@ -159,6 +167,7 @@ def run_single_simulation(
         vision_radius=config.vision_radius,
         seed=run_seed + 5_000_000,
         occupied_positions=occupied_positions,
+        attribute_variation=config.attribute_variation,
     )
 
     simulation = Simulation(
@@ -181,6 +190,8 @@ def run_single_simulation(
             "health": individual.health, "hunger": individual.hunger,
             "thirst": individual.thirst, "stamina": individual.energy,
             "fatigue": individual.needs.fatigue, "is_sleeping": individual.is_sleeping,
+            **{f"attribute_{name}": value for name, value in individual.attributes.to_dict().items()},
+            **{f"gene_{name}": value for name, value in individual.genotype.to_dict().items()},
         })
     for index, individual in enumerate(simulation.herbivores, start=1):
         initial_individual_states.append({
@@ -189,6 +200,8 @@ def run_single_simulation(
             "health": individual.health, "hunger": individual.hunger,
             "thirst": individual.thirst, "stamina": individual.energy,
             "fatigue": individual.needs.fatigue, "is_sleeping": individual.is_sleeping,
+            **{f"attribute_{name}": value for name, value in individual.attributes.to_dict().items()},
+            **{f"gene_{name}": value for name, value in individual.genotype.to_dict().items()},
         })
     for index, individual in enumerate(simulation.carnivores, start=1):
         initial_individual_states.append({
@@ -197,6 +210,8 @@ def run_single_simulation(
             "health": individual.health, "hunger": individual.hunger,
             "thirst": individual.thirst, "stamina": individual.energy,
             "fatigue": individual.needs.fatigue, "is_sleeping": individual.is_sleeping,
+            **{f"attribute_{name}": value for name, value in individual.attributes.to_dict().items()},
+            **{f"gene_{name}": value for name, value in individual.genotype.to_dict().items()},
         })
 
     simulation.run(max_steps)
@@ -300,7 +315,7 @@ class ExperimentRunner:
         max_workers: int = 1,
         scenario: Scenario | None = None,
         seed_spawn_count: int = 1,
-        max_plants: int = 100,
+        max_plants: int | None = None,
     ):
         if runs <= 0:
             raise ValueError("O número de execuções deve ser positivo.")
@@ -314,10 +329,11 @@ class ExperimentRunner:
         if seed_spawn_count < 0:
             raise ValueError("seed_spawn_count não pode ser negativo.")
 
-        if max_plants < 0:
-            raise ValueError("max_plants não pode ser negativo.")
-
         config.validate()
+        if max_plants is None:
+            max_plants = config.max_plants_capacity
+        elif max_plants < 0:
+            raise ValueError("max_plants não pode ser negativo.")
 
         if scenario is not None:
             if (config.width, config.height) != (

@@ -11,6 +11,7 @@ from agents.agent import Agent
 from agents.navigation.bfs import find_path
 from animals.carnivore import Carnivore
 from animals.herbivore import Herbivore
+from environment.obstacles import ObstacleType
 from environment.resources import Water
 from environment.world import World
 
@@ -147,6 +148,45 @@ def test_carnivore_uses_water_fallback_from_thirst_35_when_no_prey_is_available(
     assert carnivore.target == water
 
 
+
+def test_carnivore_water_search_uses_shared_target_contract_without_changing_priority():
+    world = empty_world()
+    water = (6, 1)
+    world.get_cell(*water).resource = Water()
+    carnivore = Carnivore(1, 1, vision_radius=6, rng=random.Random(9))
+    carnivore.needs.thirst = 50
+    carnivore.needs.hunger = 70
+    captured = {}
+    original_select = carnivore.target_selector.select_reachable_target
+
+    def tracked_select(*args, **kwargs):
+        captured["capture_static_path"] = kwargs.get("capture_static_path")
+        return original_select(*args, **kwargs)
+
+    carnivore.target_selector.select_reachable_target = tracked_select
+    action = carnivore.choose_action(world, [(2, 1)])
+
+    assert captured["capture_static_path"] is False
+    assert carnivore.target == water
+    assert carnivore.path[-1] == water
+    assert action != (0, 0)
+
+
+def test_carnivore_high_thirst_does_not_fall_back_to_prey_when_water_is_unreachable():
+    world = empty_world()
+    world.get_cell(6, 1).resource = Water()
+    for y in range(world.height):
+        world.get_cell(4, y).obstacle = ObstacleType.ROCK
+    carnivore = Carnivore(1, 1, vision_radius=6, rng=random.Random(10))
+    carnivore.needs.thirst = 55
+    carnivore.needs.hunger = 80
+
+    carnivore.choose_action(world, [(2, 1)])
+
+    # Preserva a prioridade sequencial preexistente: com sede alta e fontes
+    # existentes, uma fonte inalcançável não faz a política trocar para caça.
+    assert carnivore.target is None
+
 def test_perception_and_world_nearby_queries_use_different_geometries():
     from agents.perception import Perception
 
@@ -184,3 +224,63 @@ def test_human_keeps_water_target_until_periodic_reassessment():
     agent.choose_action([], world)
     assert agent._decision_tick == 5
     assert agent.last_decision_trace is not None
+
+
+def test_human_water_selection_uses_shared_contract_without_bypassing_cognition():
+    world = empty_world()
+    near_water = (4, 1)
+    far_water = (7, 5)
+    world.get_cell(*near_water).resource = Water()
+    world.get_cell(*far_water).resource = Water()
+    agent = Agent(1, 1, vision_radius=6, rng=random.Random(33))
+    agent.needs.thirst = 85.0
+
+    calls = []
+    original_select = agent.target_selector.select_reachable_target
+
+    def tracked_select(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original_select(*args, **kwargs)
+
+    agent.target_selector.select_reachable_target = tracked_select
+    candidates = human_water_candidates(agent, world)
+
+    assert len(calls) == 1
+    assert "SEEK_WATER" in candidates
+    assert candidates["SEEK_WATER"].target == near_water
+    assert candidates["SEEK_WATER"].metadata["path"][0] == (agent.x, agent.y)
+    assert candidates["SEEK_WATER"].metadata["path"][-1] == near_water
+    # O contrato fornece o alvo alcançável; a decisão cognitiva ainda escolhe
+    # entre SEEK_WATER e as demais ações elegíveis.
+    assert {"SEEK_WATER", "EXPLORE"} <= set(candidates)
+
+
+def test_human_water_contract_classifies_dynamic_occupancy_explicitly():
+    from agents.navigation.service import NavigationStatus
+
+    world = empty_world()
+    water = (6, 1)
+    world.get_cell(*water).resource = Water()
+    agent = Agent(1, 1, vision_radius=6, rng=random.Random(44))
+    agent.needs.thirst = 80.0
+    # Todas as saídas imediatas estão ocupadas: existe rota estática, mas não
+    # há rota no estado dinâmico atual.
+    agent.occupied_positions = {(0, 1), (2, 1), (1, 0), (1, 2)}
+
+    captured = {}
+    original_select = agent.target_selector.select_reachable_target
+
+    def tracked_select(*args, **kwargs):
+        result = original_select(*args, **kwargs)
+        captured["result"] = result
+        captured["blocked_positions"] = set(kwargs.get("blocked_positions") or ())
+        return result
+
+    agent.target_selector.select_reachable_target = tracked_select
+    agent.choose_action([], world)
+
+    assert captured["blocked_positions"] == agent.occupied_positions
+    result = captured["result"]
+    assert len(result.attempts) == 1
+    assert result.attempts[0].navigation.status is NavigationStatus.TEMPORARILY_BLOCKED
+    assert result.attempts[0].navigation.reason == "OCCUPANCY_BLOCKS_ALL_ROUTES"
