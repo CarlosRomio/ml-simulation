@@ -2,6 +2,7 @@
 
 import pygame
 
+from agents.agent import Agent
 from environment.resources import MaterialKind
 from visualization.rendering_config import (
     CELL_COLOR,
@@ -59,7 +60,7 @@ class SidebarRenderer:
             max(0, footer_top - self.CONTENT_TOP - 8),
         )
 
-        agent = simulation.observed_agent
+        agent = getattr(simulation, "observed_individual", simulation.observed_agent)
         rows = self._build_rows(
             simulation, agent, effective_speed, plant_counts
         )
@@ -104,10 +105,12 @@ class SidebarRenderer:
         screen.blit(surface, (status_x, 57))
 
         # Saúde e último dano ficam no cabeçalho fixo para não depender da rolagem.
-        agent = simulation.observed_agent
+        agent = getattr(simulation, "observed_individual", simulation.observed_agent)
+        default_id = "H?" if isinstance(agent, Agent) else ("C?" if agent.species.name == "CARNIVORE" else "V?")
+        individual_id = getattr(agent, "agent_id", None) or default_id
         health_color = (225, 100, 85) if agent.health <= agent.needs.max_health * 0.3 else (105, 200, 125)
         health_label = self.small_font.render(
-            f"SAÚDE {agent.agent_id or f'H{simulation.agents.index(agent) + 1:03d}'}: {agent.health:.1f}/{agent.needs.max_health:.0f}",
+            f"SAÚDE {individual_id}: {agent.health:.1f}/{agent.needs.max_health:.0f}",
             True, TEXT_COLOR,
         )
         screen.blit(health_label, (GRID_PADDING, 73))
@@ -134,6 +137,8 @@ class SidebarRenderer:
                          (SIDEBAR_WIDTH - GRID_PADDING, 119), 1)
 
     def _build_rows(self, simulation, agent, effective_speed, plant_counts):
+        if not isinstance(agent, Agent):
+            return self._build_animal_rows(simulation, agent, plant_counts)
         rows = []
         alive_humans = len(simulation.alive_agents)
         alive_herbivores = len(simulation.alive_herbivores)
@@ -222,6 +227,87 @@ class SidebarRenderer:
             ("row", "Ataques de carnívoros", str(simulation.carnivore_attacks)),
             ("row", "Caças concluídas", str(simulation.animals_killed)),
         ])
+        return rows
+
+
+    def _build_animal_rows(self, simulation, animal, plant_counts):
+        """Painel de inspeção para herbívoros e carnívoros sem atributos humanos fictícios."""
+        from animals.carnivore import Carnivore
+
+        species_label = "CARNÍVORO" if isinstance(animal, Carnivore) else "HERBÍVORO"
+        individual_id = getattr(animal, "agent_id", "C?" if isinstance(animal, Carnivore) else "V?")
+        life = getattr(animal, "life_history", None)
+        genotype = getattr(animal, "genotype", None)
+        attributes = getattr(animal, "attributes", None)
+        target = getattr(animal, "target", None)
+        target_intent = getattr(animal, "last_behavior_intent", "HUNT" if isinstance(animal, Carnivore) else "FORAGE")
+        rows = [
+            ("section", "MUNDO"),
+            ("row", "Passos", str(simulation.steps)),
+            ("row", "Tempo simulado", simulation.simulated_time_label),
+            ("row", "Humanos vivos", f"{len(simulation.alive_agents)}/{len(simulation.agents)}"),
+            ("row", "Herbívoros vivos", f"{len(simulation.alive_herbivores)}/{len(simulation.herbivores)}", (126, 210, 112)),
+            ("row", "Carnívoros vivos", f"{len(simulation.alive_carnivores)}/{len(simulation.carnivores)}", (220, 120, 105)),
+            ("row", "Plantas maduras", str(plant_counts.get("mature", 0))),
+            ("row", "Fontes de água", str(len(simulation.world.get_water_positions()))),
+            ("gap", 5),
+            ("section", f"{species_label} {individual_id}"),
+            ("row", "Estado", "VIVO" if animal.alive else "MORTO", ENERGY_COLOR if animal.alive else ENERGY_LOW_COLOR),
+            ("row", "Posição", f"({animal.x}, {animal.y})"),
+            ("row", "Atividade", str(getattr(animal, "last_activity", "—"))),
+            ("row", "Intenção", str(target_intent)),
+            ("row", "Alvo atual", str(target) if target is not None else "nenhum"),
+            ("row", "Raio de visão", str(getattr(animal, "vision_radius", "—"))),
+            ("row", "Corrida", str(getattr(animal, "running", False))),
+            ("gap", 5),
+            ("section", "FISIOLOGIA"),
+            ("bar", "Saúde", animal.health, animal.needs.max_health,
+             (225, 100, 85) if animal.health <= animal.needs.max_health * 0.3 else (105, 200, 125)),
+            ("bar", "Estamina", animal.energy, animal.needs.max_energy, ENERGY_COLOR),
+            ("bar", "Fadiga", animal.needs.fatigue, animal.needs.max_fatigue,
+             (225, 100, 85) if animal.needs.fatigue >= 75 else (175, 150, 215)),
+            ("bar", "Fome", animal.hunger, animal.needs.max_hunger,
+             (225, 100, 85) if animal.hunger >= animal.needs.starvation_threshold else (220, 170, 80)),
+            ("bar", "Sede", animal.thirst, animal.needs.max_thirst,
+             (225, 100, 85) if animal.thirst >= animal.needs.dehydration_threshold else (90, 190, 235)),
+            ("row", "Dano por predação", f"{animal.needs.damage_by_cause.get('PREDATION', 0.0):.1f}"),
+            ("row", "Dano por fome", f"{animal.needs.damage_by_cause.get('STARVATION', 0.0):.1f}"),
+            ("row", "Dano por sede", f"{animal.needs.damage_by_cause.get('DEHYDRATION', 0.0):.1f}"),
+        ]
+        if life is not None:
+            rows.extend([
+                ("gap", 5), ("section", "CICLO DE VIDA / REPRODUÇÃO"),
+                ("row", "Sexo", str(life.sex)),
+                ("row", "Idade (passos)", str(life.age_steps)),
+                ("row", "Geração", str(life.generation)),
+                ("row", "Progenitores", ", ".join(life.parent_ids) if life.parent_ids else "fundador/desconhecido"),
+                ("row", "Descendentes", str(life.offspring_count)),
+                ("row", "Cooldown reprodutivo", str(life.reproductive_cooldown)),
+                ("row", "Gestação/incubação", str(life.pregnancy_remaining)),
+            ])
+        if attributes is not None:
+            rows.extend([
+                ("gap", 5), ("section", "FENÓTIPO"),
+                ("row", "Força", f"{attributes.strength:.3f}"),
+                ("row", "Agilidade", f"{attributes.agility:.3f}"),
+                ("row", "Constituição", f"{attributes.constitution:.3f}"),
+                ("row", "Resistência", f"{attributes.endurance:.3f}"),
+                ("row", "Visão genética", f"{attributes.vision:.3f}"),
+                ("row", "Olfato", f"{attributes.olfaction:.3f}"),
+                ("row", "Inteligência", f"{attributes.intelligence:.3f}"),
+                ("row", "Memória", f"{attributes.memory:.3f}"),
+                ("row", "Eficiência metabólica", f"{attributes.metabolic_efficiency:.3f}"),
+            ])
+        if genotype is not None:
+            rows.extend([("gap", 5), ("section", "GENÓTIPO")])
+            rows.extend(("row", name, f"{value:.3f}") for name, value in genotype.to_dict().items())
+        if isinstance(animal, Carnivore):
+            rows.extend([
+                ("gap", 5), ("section", "CAÇA"),
+                ("row", "Abates", str(getattr(animal, "kills", 0))),
+                ("row", "Trocas de alvo", str(getattr(animal, "hunt_target_switches", 0))),
+                ("row", "Estagnação caça", str(getattr(animal, "hunt_stagnation_steps", 0))),
+            ])
         return rows
 
     @staticmethod

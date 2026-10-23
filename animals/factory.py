@@ -9,7 +9,7 @@ from environment.world import World
 
 class HerbivoreFactory:
     @staticmethod
-    def create(world: World, count: int, *, vision_radius: int = 4, seed: int | None = None,
+    def create(world: World, count: int, *, vision_radius: int = 12, seed: int | None = None,
                occupied_positions: set[tuple[int, int]] | None = None,
                attribute_variation: float = 0.12) -> list[Herbivore]:
         if count < 0:
@@ -42,7 +42,7 @@ class HerbivoreFactory:
 class CarnivoreFactory:
     """Cria carnívoros em células livres sem sobreposição com outras entidades."""
     @staticmethod
-    def create(world: World, count: int, *, vision_radius: int = 5, seed: int | None = None,
+    def create(world: World, count: int, *, vision_radius: int = 12, seed: int | None = None,
                occupied_positions: set[tuple[int, int]] | None = None,
                attribute_variation: float = 0.12):
         from animals.carnivore import Carnivore

@@ -31,7 +31,7 @@ def test_metrics_track_steps():
     simulation.step()
 
     assert simulation.metrics.steps == 2
-    assert simulation.metrics.final_energy == 98.0
+    assert simulation.metrics.final_energy == 90.0
     assert simulation.metrics.simulated_time_seconds == 120.0
 
 
@@ -76,7 +76,7 @@ def test_metrics_track_energy_average():
     simulation.step()
 
 # A média inclui o estado inicial e os estados finais de cada passo.
-    assert simulation.metrics.average_energy == 99.0
+    assert simulation.metrics.average_energy == 95.0
 
 
 def test_metrics_track_stationary_agent():

@@ -89,11 +89,21 @@ def run(simulation: Simulation) -> None:
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 if mouse_down_position is not None and abs(event.pos[0] - mouse_down_position[0]) <= 5 and abs(event.pos[1] - mouse_down_position[1]) <= 5 and grid_viewport.collidepoint(event.pos):
                     selected_position = camera.screen_to_world(event.pos[0], event.pos[1], grid_x, grid_y)
-                    selected = next((item for item in simulation.agents if (item.x, item.y) == selected_position), None)
+                    selectable = simulation.agents + simulation.herbivores + simulation.carnivores
+                    selected = next((item for item in selectable
+                                     if item.alive and (item.x, item.y) == selected_position), None)
                     if selected is not None:
-                        simulation.observed_agent = selected
-                        if simulation.manual_control_agent is not None:
-                            simulation.set_manual_control(selected, True)
+                        simulation.observed_individual = selected
+                        # Apenas humanos podem ser controlados manualmente ou usados
+                        # pelas ações de construção do protótipo atual.
+                        if selected in simulation.agents:
+                            simulation.observed_agent = selected
+                            if simulation.manual_control_agent is not None:
+                                simulation.set_manual_control(selected, True)
+                        elif simulation.manual_control_agent is not None:
+                            # Ao inspecionar um animal, não deixa o teclado continuar
+                            # controlando silenciosamente um humano não selecionado.
+                            simulation.set_manual_control(simulation.manual_control_agent, False)
                 dragging_camera = False
                 last_mouse_position = None
                 mouse_down_position = None
@@ -127,20 +137,28 @@ def run(simulation: Simulation) -> None:
                 elif event.key == pygame.K_SPACE and (bool(simulation.alive_agents) or bool(simulation.alive_herbivores) or bool(simulation.alive_carnivores)):
                     paused = not paused
                 elif event.key == pygame.K_b:
-                    built = simulation.build_shelter(simulation.observed_agent)
-                    build_message = ("Abrigo construido" if built else
-                                     "Abrigo: requer 5 madeiras, 2 pedras e celula livre")
+                    if simulation.observed_individual in simulation.agents:
+                        built = simulation.build_shelter(simulation.observed_agent)
+                        build_message = ("Abrigo construído" if built else
+                                         "Abrigo: requer 5 madeiras, 2 pedras e celula livre")
+                    else:
+                        build_message = "Construção disponível apenas para humanos"
                 elif event.key == pygame.K_f:
-                    test_carnivore = simulation.spawn_test_carnivore_near(
-                        simulation.observed_agent
-                    )
-                    build_message = (
-                        "Predador de teste criado ao lado do humano"
-                        if test_carnivore is not None
-                        else "Predador de teste: nenhuma celula adjacente livre"
-                    )
+                    if simulation.observed_individual in simulation.agents:
+                        test_carnivore = simulation.spawn_test_carnivore_near(
+                            simulation.observed_agent
+                        )
+                        build_message = (
+                            "Predador de teste criado ao lado do humano"
+                            if test_carnivore is not None
+                            else "Predador de teste: nenhuma celula adjacente livre"
+                        )
+                    else:
+                        build_message = "Predador de teste: selecione um humano"
                 elif event.key == pygame.K_m:
-                    if simulation.manual_control_agent is simulation.observed_agent:
+                    if simulation.observed_individual not in simulation.agents:
+                        build_message = "Controle manual disponível apenas para humanos"
+                    elif simulation.manual_control_agent is simulation.observed_agent:
                         simulation.set_manual_control(simulation.observed_agent, False)
                         build_message = "Controle manual desativado; agente voltou a IA"
                     elif simulation.set_manual_control(simulation.observed_agent, True):
@@ -174,7 +192,7 @@ def run(simulation: Simulation) -> None:
 
         window_width, window_height = screen.get_size()
         screen.fill(BACKGROUND)
-        agent = simulation.observed_agent
+        agent = simulation.observed_individual
 
         # A câmera é independente da posição do agente e se move por arraste.
         camera_x = camera.x
@@ -229,14 +247,15 @@ def run(simulation: Simulation) -> None:
                     cell_size=cell_size,
                     grid_x=grid_x,
                     grid_y=grid_y,
-                    selected=current_agent is simulation.observed_agent,
+                    selected=current_agent is simulation.observed_individual,
                 )
             for animal in (*simulation.herbivores, *simulation.carnivores):
                 if not (camera_x <= animal.x < camera_x + visible_world_width and
                         camera_y <= animal.y < camera_y + visible_world_height):
                     continue
                 animal_renderer.draw(screen, animal, camera_x=camera_x, camera_y=camera_y,
-                                     cell_size=cell_size, grid_x=grid_x, grid_y=grid_y)
+                                     cell_size=cell_size, grid_x=grid_x, grid_y=grid_y,
+                                     selected=animal is simulation.observed_individual)
         finally:
             screen.set_clip(previous_clip)
         if build_message:

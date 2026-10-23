@@ -48,7 +48,7 @@ def test_social_comparison_writes_paired_results_and_group_audit(tmp_path):
         "UNCLASSIFIED", "INITIAL", "REST_IN_SHELTER", "DRINK_WATER", "COLLECT_MATERIAL",
         "INTERACT_STORAGE", "SOCIAL_REUNION", "SOCIAL_APPROACH", "BUILD_SHELTER", "HUNT",
         "SEEK_FOOD", "SEEK_WATER", "GATHER_MATERIAL", "SEEK_SHELTER", "NAVIGATE_TARGET",
-        "EXPLORATION",
+        "EXPLORATION", "SEEK_MATE",
     }
     for run_row in result["runs"]:
         activity_rows = [row for row in result["agent_activity_history"]

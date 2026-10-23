@@ -32,8 +32,8 @@ def test_tired_human_stays_in_shelter_and_recovers_extra_energy():
     sim.step()
 
     assert (agent.x, agent.y) == (2, 2)
-    assert agent.energy == 58.0
-    assert sim.diagnostic_history[-1]["rest_energy_recovered"] == 8.0
+    assert agent.energy == 60.0
+    assert sim.diagnostic_history[-1]["rest_energy_recovered"] == 10.0
 
 
 def test_shelter_does_not_override_urgent_thirst_or_hunger():

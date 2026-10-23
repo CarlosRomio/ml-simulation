@@ -121,6 +121,14 @@ class AgentNeeds:
             raise ValueError("A quantidade de água deve ser finita e não negativa.")
         self.thirst = max(0.0, self.thirst - amount)
 
+    def restore_health(self, amount: float) -> float:
+        """Recupera saúde sem ultrapassar o máximo; retorna a cura efetiva."""
+        if not isfinite(amount) or amount < 0:
+            raise ValueError("A recuperação de saúde deve ser finita e não negativa.")
+        previous_health = self.health
+        self.health = min(self.max_health, self.health + amount)
+        return self.health - previous_health
+
     def restore_energy(self, amount: float) -> None:
         if not isfinite(amount) or amount < 0:
             raise ValueError("A recuperação de energia deve ser finita e não negativa.")

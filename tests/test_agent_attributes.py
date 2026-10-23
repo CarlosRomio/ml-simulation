@@ -51,7 +51,7 @@ def test_human_factory_derives_capacity_and_perception_from_attributes():
     assert all(agent.needs.max_health > 0 for agent in agents)
     assert all(agent.needs.max_energy > 0 for agent in agents)
     assert all(agent.vision_radius >= 0 for agent in agents)
-    assert all(agent.run_distance in (1, 2) for agent in agents)
+    assert all(agent.run_distance in (3, 4) for agent in agents)
     assert all(agent.needs.max_health == pytest.approx(
         100.0 * agent.attributes.relative_multiplier(Species.HUMAN, "constitution")
     ) for agent in agents)
@@ -72,7 +72,7 @@ def test_animal_factories_create_individualized_species_attributes():
     assert len({animal.attributes for animal in carnivores}) > 1
     assert all(animal.species is Species.HERBIVORE for animal in herbivores)
     assert all(animal.species is Species.CARNIVORE for animal in carnivores)
-    assert all(animal.run_distance in (2, 3) for animal in carnivores)
+    assert all(animal.run_distance in (4, 5) for animal in carnivores)
     assert all(animal.needs.max_energy > 0 for animal in [*herbivores, *carnivores])
 
 
@@ -131,3 +131,17 @@ def test_factory_agents_keep_genotype_and_phenotype_consistent():
     carnivores = CarnivoreFactory.create(world, 3, seed=224, occupied_positions=occupied)
     for individual in [*herbivores, *carnivores]:
         assert individual.attributes == individual.genotype.express()
+
+
+def test_personality_is_heritable_with_bounded_mutation():
+    from agents.cognition.personality import Personality
+
+    parent_a = Personality(risk_aversion=0.9, aggressiveness=0.2, persistence=0.8)
+    parent_b = Personality(risk_aversion=0.7, aggressiveness=0.4, persistence=0.6)
+    child = Personality.inherit(parent_a, parent_b, random.Random(4), mutation_rate=0.0)
+    assert child.risk_aversion == pytest.approx(0.8)
+    assert child.aggressiveness == pytest.approx(0.3)
+    assert child.persistence == pytest.approx(0.7)
+
+    mutated = Personality.inherit(parent_a, parent_b, random.Random(4), mutation_rate=1.0, mutation_strength=0.8)
+    assert all(0.0 <= value <= 1.0 for value in mutated.to_dict().values())

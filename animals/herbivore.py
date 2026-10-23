@@ -5,19 +5,23 @@ import random
 from random import Random
 
 from agents.navigation.service import NavigationService, NavigationStatus
+from agents.navigation.exploration import choose_exploration_waypoint
 from agents.target_selector import TargetSelector
 from agents.needs import AgentNeeds
 from agents.attributes import IndividualAttributes, IndividualGenotype
 from agents.species import Species
+from agents.cognition.personality import Personality
+from configuration.species_physiology import DEFAULT_HUNGER_PER_STEP, adjusted_hunger_rate
 from environment.resources import Plant, PlantState, Water
 from environment.world import World
 
 
 class Herbivore:
-    def __init__(self, x: int, y: int, *, vision_radius: int = 4,
+    def __init__(self, x: int, y: int, *, vision_radius: int = 12,
                  needs: AgentNeeds | None = None, rng: Random | None = None,
                  attributes: IndividualAttributes | None = None,
-                 genotype: IndividualGenotype | None = None):
+                 genotype: IndividualGenotype | None = None,
+                 personality: Personality | None = None):
         if vision_radius < 0:
             raise ValueError("vision_radius não pode ser negativo")
         self.x, self.y = x, y
@@ -27,15 +31,20 @@ class Herbivore:
             else IndividualGenotype.species_founder(self.species, (rng if rng is not None else random), variation=0.0)
         )
         self.attributes = attributes if attributes is not None else IndividualAttributes.from_genotype(self.genotype)
-        self.vision_radius = (self.attributes.adjusted_radius(self.species, vision_radius)
+        self.personality = personality if personality is not None else Personality.randomized(
+            (rng if rng is not None else random)
+        )
+        self.vision_radius = (max(vision_radius - 2, self.attributes.adjusted_radius(self.species, vision_radius))
                               if attributes is not None else vision_radius)
-        self.run_distance = 2 if self.attributes.agility >= 0.5 else 1
+        self.run_distance = 4 if self.attributes.agility >= 0.5 else 3
         constitution = self.attributes.relative_multiplier(self.species, "constitution")
         endurance = self.attributes.relative_multiplier(self.species, "endurance")
         self.needs = needs if needs is not None else AgentNeeds(
             max_health=100.0 * constitution, health=100.0 * constitution,
-            max_energy=60.0 * endurance, energy=60.0 * endurance,
-            hunger=25.0, thirst=20.0, hunger_per_step=0.3, thirst_per_step=0.2,
+            max_energy=80.0 * endurance, energy=80.0 * endurance,
+            hunger=25.0, thirst=20.0,
+            hunger_per_step=adjusted_hunger_rate(DEFAULT_HUNGER_PER_STEP[self.species], self.species, self.attributes),
+            thirst_per_step=0.2,
         )
         self.alive = self.needs.alive
         self.is_sleeping = False
@@ -46,6 +55,9 @@ class Herbivore:
         self.rng = rng if rng is not None else random
         self.target: tuple[int, int] | None = None
         self.path: list[tuple[int, int]] = []
+        self.exploration_target: tuple[int, int] | None = None
+        self.visit_counts: dict[tuple[int, int], int] = {}
+        self._recent_positions: list[tuple[int, int]] = []
         self.fleeing = False
         # Instrumentação de navegação: tentativa de movimento bloqueada e
         # impedimento detectado durante o planejamento dinâmico são distintos.
@@ -95,6 +107,11 @@ class Herbivore:
             return (0, 0)
 
         current = (self.x, self.y)
+        self.visit_counts[current] = self.visit_counts.get(current, 0) + 1
+        if current in self._recent_positions:
+            self._recent_positions.remove(current)
+        self._recent_positions.append(current)
+        self._recent_positions = self._recent_positions[-40:]
         blocked = set(occupied_positions or ())
         blocked.discard(current)
         agent_positions = set(occupied_agent_positions or ())
@@ -135,8 +152,7 @@ class Herbivore:
                 return max(valid,key=lambda item:item[0])[1]
 
         # Tenta primeiro o recurso correspondente à necessidade mais urgente.
-        # Se todas as fontes dessa categoria estiverem ocupadas/inacessíveis,
-        # tenta a outra necessidade antes de recorrer à exploração aleatória.
+        # Se houver uma necessidade acionável, ela substitui a patrulha exploratória.
         resource_groups: list[tuple[str, list[tuple[int, int]]]] = []
         if self.thirst >= 45:
             resource_groups.append(("WATER", world.get_water_positions()))
@@ -201,6 +217,7 @@ class Herbivore:
                     target = selection.target
                     path = selection.navigation.path or []
                     self.target = target
+                    self.exploration_target = None
                     self.path = path
                     next_action = self.navigation.next_step(path, current)
                     if next_action is not None:
@@ -230,6 +247,7 @@ class Herbivore:
                     continue
 
                 self.target = target
+                self.exploration_target = None
                 self.path = path
                 next_action = self.navigation.next_step(path, current)
                 if next_action is not None:
@@ -238,19 +256,31 @@ class Herbivore:
 
         # Não mantém um alvo que foi provado inalcançável no estado dinâmico
         # atual. Isso permite reconsiderar recursos no próximo passo.
+        # Exploração persistente: escolhe uma região distante e pouco visitada,
+        # planeja a rota e a mantém até chegar ou detectar bloqueio dinâmico.
         self.target = None
-        self.path = []
-        options=[(0,-1),(0,1),(-1,0),(1,0)]
-        self.rng.shuffle(options)
-        for dx,dy in options:
-            destination = (self.x + dx, self.y + dy)
-            if destination in blocked:
-                self.last_navigation_block_reason = self.last_navigation_block_reason or classify_block(destination)
-                continue
-            if world.is_walkable(*destination):
-                return dx,dy
-            self.last_navigation_block_reason = self.last_navigation_block_reason or "OBSTACLE"
-        return (0,0)
+        if self.exploration_target is not None and self.exploration_target != current and self.path and current in self.path:
+            path_index = self.path.index(current)
+            route = self.path[path_index:]
+            if len(route) > 1 and not any(pos in blocked for pos in route[1:]):
+                self.path = route
+                return self.navigation.next_step(route, current) or (0, 0)
+        plan = choose_exploration_waypoint(
+            world, current,
+            lambda route_world, start, goal: self.navigation.find_path(
+                route_world, start, goal, blocked_positions=blocked
+            ),
+            self.rng, self.visit_counts, self._recent_positions,
+            min_distance=max(10, self.vision_radius),
+            max_distance=max(18, min(max(world.width, world.height) // 2, 45)),
+            candidate_limit=20,
+        )
+        if plan is None:
+            self.exploration_target = None
+            self.path = []
+            return (0, 0)
+        self.exploration_target, self.path = plan
+        return self.navigation.next_step(self.path, current) or (0, 0)
 
     def eat(self, amount: float = 35.0) -> None:
         self.needs.eat(amount)

@@ -8,6 +8,7 @@ from agents.needs import AgentNeeds
 from agents.species import Species
 from agents.attributes import IndividualAttributes, IndividualGenotype
 from agents.cognition import Personality
+from configuration.species_physiology import DEFAULT_HUNGER_PER_STEP, adjusted_hunger_rate
 from environment.world import World
 
 
@@ -23,7 +24,7 @@ class AgentFactory:
         thirst_per_step: float = 0.2,
         dehydration_threshold: float = 90.0,
         dehydration_damage_per_step: float | None = None,
-        hunger_per_step: float = 0.25,
+        hunger_per_step: float = DEFAULT_HUNGER_PER_STEP[Species.HUMAN],
         starvation_threshold: float = 90.0,
         starvation_damage_per_step: float | None = None,
         attribute_variation: float = 0.12,
@@ -88,7 +89,11 @@ class AgentFactory:
                 health=100.0 * constitution_scale,
                 max_energy=100.0 * endurance_scale,
                 energy=100.0 * endurance_scale,
-                hunger_per_step=needs_template.hunger_per_step,
+                # A eficiência metabólica hereditária reduz ou aumenta o consumo basal.
+                # O valor de configuração representa o perfil médio da espécie.
+                hunger_per_step=adjusted_hunger_rate(
+                    needs_template.hunger_per_step, Species.HUMAN, attributes
+                ),
                 thirst_per_step=needs_template.thirst_per_step,
                 starvation_threshold=needs_template.starvation_threshold,
                 dehydration_threshold=needs_template.dehydration_threshold,

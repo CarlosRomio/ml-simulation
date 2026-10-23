@@ -94,10 +94,12 @@ def test_agent_abandons_unreachable_food():
 
     action = agent.choose_action(nearby_cells, world)
 
-    assert agent.target is None
-    assert agent.path == []
+    assert agent.target is not None
+    assert agent.target_intent == "EXPLORATION"
+    assert agent.target != (5, 3)
+    assert agent.path
 
-    # Deve explorar uma célula transitável do lado em que está.
+    # Deve iniciar uma rota exploratória alcançável no lado em que está.
     assert action != (0, 0)
     assert world.is_walkable(
         agent.x + action[0],

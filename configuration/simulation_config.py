@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from math import isfinite
 
+from agents.species import Species
+from configuration.species_physiology import DEFAULT_HUNGER_PER_STEP
+
 
 @dataclass
 class SimulationConfig:
@@ -25,12 +28,12 @@ class SimulationConfig:
     agent_count: int = 1
     herbivore_count: int = 0
     carnivore_count: int = 0
-    vision_radius: int = 6
+    vision_radius: int = 12
     # Desvio-padrão da variação individual ao redor do perfil da espécie (escala 0..1).
     attribute_variation: float = 0.12
 
     # Parâmetros fisiológicos (mantêm os valores atuais por padrão)
-    hunger_per_step: float = 0.25
+    hunger_per_step: float = DEFAULT_HUNGER_PER_STEP[Species.HUMAN]
     thirst_per_step: float = 0.2
     starvation_threshold: float = 90.0
     dehydration_threshold: float = 90.0

@@ -49,3 +49,16 @@ def test_water_density_is_validated_and_counted_in_config():
     config = SimulationConfig(width=20, height=20, water_density=0.1)
     assert config.water_count == 40
     config.validate()
+
+
+def test_health_restoration_is_bounded_and_validated():
+    import pytest
+    from agents.needs import AgentNeeds
+
+    needs = AgentNeeds(max_health=100.0, health=60.0)
+    assert needs.restore_health(15.0) == 15.0
+    assert needs.health == 75.0
+    assert needs.restore_health(100.0) == 25.0
+    assert needs.health == 100.0
+    with pytest.raises(ValueError):
+        needs.restore_health(-1.0)

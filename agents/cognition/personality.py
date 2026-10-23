@@ -13,6 +13,8 @@ from typing import Protocol
 
 class RandomSource(Protocol):
     def uniform(self, a: float, b: float) -> float: ...
+    def random(self) -> float: ...
+    def gauss(self, mu: float, sigma: float) -> float: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +62,33 @@ class Personality:
             persistence=rng.uniform(0.0, 1.0),
             reward_sensitivity=rng.uniform(0.0, 1.0),
         )
+
+    @classmethod
+    def inherit(
+        cls,
+        parent_a: "Personality",
+        parent_b: "Personality",
+        rng: RandomSource | Random,
+        *,
+        mutation_rate: float = 0.02,
+        mutation_strength: float = 0.06,
+    ) -> "Personality":
+        """Herde temperamento dos pais com mutações pequenas e limitadas.
+
+        Personalidade não é destino: os traços apenas alteram probabilidades e
+        limiares de decisão. A média parental preserva continuidade entre gerações.
+        """
+        if not isfinite(mutation_rate) or not 0.0 <= mutation_rate <= 1.0:
+            raise ValueError("mutation_rate deve estar entre 0 e 1.")
+        if not isfinite(mutation_strength) or mutation_strength < 0.0:
+            raise ValueError("mutation_strength deve ser finito e não negativo.")
+        values: dict[str, float] = {}
+        for name, value_a in asdict(parent_a).items():
+            value = (value_a + getattr(parent_b, name)) / 2.0
+            if mutation_rate > 0.0 and mutation_strength > 0.0 and rng.random() < mutation_rate:
+                value += rng.gauss(0.0, mutation_strength)
+            values[name] = min(1.0, max(0.0, value))
+        return cls(**values)
 
     def to_dict(self) -> dict[str, float]:
         return {name: round(value, 6) for name, value in asdict(self).items()}

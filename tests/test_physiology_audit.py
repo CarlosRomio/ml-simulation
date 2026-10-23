@@ -22,7 +22,7 @@ def test_energy_is_stamina_and_never_classifies_death_as_starvation():
 
     assert agent.alive
     assert simulation.metrics.termination_cause == "RUNNING"
-    assert simulation.metrics.final_energy == 2.0  # repouso recupera estamina
+    assert simulation.metrics.final_energy == 7.0  # recuperação adaptativa: bônus com reserva zerada
 
 
 def test_movement_consumes_stamina_and_rest_recovers_it():

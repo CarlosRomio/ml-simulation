@@ -146,8 +146,10 @@ def test_herbivore_target_progress_classifies_water_intent():
         hunger_per_step=0.0, thirst_per_step=0.0,
     )
     herbivore = Herbivore(1, 1, vision_radius=8, needs=needs)
+    human = Agent(0, 7)
+    human.choose_action = lambda nearby, route_world: (0, 0)
     simulation = Simulation(
-        world, agents=[Agent(0, 7)], herbivores=[herbivore],
+        world, agents=[human], herbivores=[herbivore],
         seed_spawn_count=0, max_plants=0, social_behavior_enabled=False,
     )
 
@@ -194,8 +196,10 @@ def test_herbivore_target_progress_classifies_food_intent():
         hunger_per_step=0.0, thirst_per_step=0.0,
     )
     herbivore = Herbivore(1, 1, vision_radius=8, needs=needs)
+    human = Agent(0, 7)
+    human.choose_action = lambda nearby, route_world: (0, 0)
     simulation = Simulation(
-        world, agents=[Agent(0, 7)], herbivores=[herbivore],
+        world, agents=[human], herbivores=[herbivore],
         seed_spawn_count=0, max_plants=0, social_behavior_enabled=False,
     )
 
@@ -205,3 +209,17 @@ def test_herbivore_target_progress_classifies_food_intent():
                   if row["individual_type"] == "HERBIVORE")
     assert record["target_intent_before_action"] == "SEEK_FOOD"
     assert record["resource_access_target_kind_before_action"] == "FOOD"
+
+
+def test_audit_caps_workers_to_number_of_runs(tmp_path):
+    config = SimulationConfig(
+        width=10, height=10, food_density=0.02, obstacle_density=0,
+        water_density=0, wood_density=0, stone_density=0,
+        agent_count=1, herbivore_count=0, carnivore_count=0, vision_radius=3,
+    )
+    result = run_audit(
+        runs=1, steps=2, seed=933, workers=4, config=config,
+        output=tmp_path / "audit", sample_every=1, seed_spawn_count=0, max_plants=10,
+    )
+    assert result["manifest"]["workers_requested"] == 4
+    assert result["manifest"]["workers"] == 1

@@ -22,7 +22,8 @@ def test_physiology_config_reaches_agents_and_metrics():
 # Starts at thirst 20; with no water, the configured per-step increase is visible.
     assert abs(metrics.final_thirst - 27.515) < 1e-9
     assert metrics.critical_thirst_steps == 0
-    assert abs(metrics.final_hunger - 24.53) < 1e-9
+    # A eficiência metabólica hereditária reduz a taxa basal e o custo de movimento.
+    assert 24.0 < metrics.final_hunger < 24.53
 
 
 def test_sleeping_recovers_fatigue_and_wakes_for_hunger():
@@ -57,8 +58,8 @@ def test_running_moves_two_cells_and_consumes_more_stamina_than_walking():
     assert simulation.set_manual_control(agent)
     assert simulation.queue_manual_action(1, 0, run=True)
     simulation.step()
-    assert (agent.x, agent.y) == (5, 5)
-    assert agent.energy == 92.0
+    assert (agent.x, agent.y) == (7, 5)
+    assert agent.energy == 95.0
     assert simulation.physiology_activity_history[-1]["activity"] == "RUNNING"
 
 
@@ -95,8 +96,8 @@ def test_herbivore_can_sprint_two_cells_when_fleeing_and_has_stamina():
     simulation.step()
     distance = abs(herbivore.x - before[0]) + abs(herbivore.y - before[1])
     assert herbivore.last_activity == "RUNNING"
-    assert distance == 2
-    assert herbivore.needs.energy == 52.0
+    assert distance == 4
+    assert herbivore.needs.energy == 75.0
 
 
 def test_animal_sleep_reduces_fatigue_and_wakes_for_hunger():
@@ -156,15 +157,15 @@ def test_carnivore_attack_spends_stamina_and_requires_reserve():
     simulation = Simulation(world, agents=[human], carnivores=[carnivore], seed_spawn_count=0)
     simulation.step()
     assert simulation.carnivore_attacks == 1
-    assert carnivore.needs.energy == 72.0
+    assert carnivore.needs.energy == 105.0
     record = [r for r in simulation.physiology_activity_history if r["individual_type"] == "CARNIVORE"][-1]
-    assert record["stamina_spent_combat"] == 8.0
+    assert record["stamina_spent_combat"] == 5.0
 
     world2 = World(width=6, height=6, food_count=0, obstacle_count=0, water_count=0)
     human2 = Agent(2, 2)
     human2.choose_action = lambda nearby_cells, world: (0, 0)
     weak_carnivore = Carnivore(3, 2)
-    weak_carnivore.needs.energy = 5.0
+    weak_carnivore.needs.energy = 0.0
     simulation2 = Simulation(world2, agents=[human2], carnivores=[weak_carnivore], seed_spawn_count=0)
     simulation2.step()
     assert simulation2.carnivore_attacks == 0

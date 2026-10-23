@@ -31,6 +31,8 @@ class SimulationRunResult:
     human_physiology_history: list[list[dict]] = field(default_factory=list)
     physiology_activity_history: list[dict[str, object]] = field(default_factory=list)
     carnivore_hunt_history: list[dict[str, object]] = field(default_factory=list)
+    reproduction_events: list[dict[str, object]] = field(default_factory=list)
+    reproduction_diagnostics: list[dict[str, object]] = field(default_factory=list)
     agent_ids: list[str] = field(default_factory=list)
     social_history: list[dict[str, object]] = field(default_factory=list)
     social_agent_history: list[dict[str, object]] = field(default_factory=list)
@@ -186,6 +188,8 @@ def run_single_simulation(
         initial_individual_states.append({
             "individual_type": "HUMAN",
             "individual_id": individual.agent_id or f"H{index:03d}",
+            "sex": individual.life_history.sex, "age_steps": individual.life_history.age_steps,
+            "generation": individual.life_history.generation,
             "x": individual.x, "y": individual.y,
             "health": individual.health, "hunger": individual.hunger,
             "thirst": individual.thirst, "stamina": individual.energy,
@@ -195,7 +199,9 @@ def run_single_simulation(
         })
     for index, individual in enumerate(simulation.herbivores, start=1):
         initial_individual_states.append({
-            "individual_type": "HERBIVORE", "individual_id": f"V{index:03d}",
+            "individual_type": "HERBIVORE", "individual_id": individual.life_history.individual_id,
+            "sex": individual.life_history.sex, "age_steps": individual.life_history.age_steps,
+            "generation": individual.life_history.generation,
             "x": individual.x, "y": individual.y,
             "health": individual.health, "hunger": individual.hunger,
             "thirst": individual.thirst, "stamina": individual.energy,
@@ -205,7 +211,9 @@ def run_single_simulation(
         })
     for index, individual in enumerate(simulation.carnivores, start=1):
         initial_individual_states.append({
-            "individual_type": "CARNIVORE", "individual_id": f"C{index:03d}",
+            "individual_type": "CARNIVORE", "individual_id": individual.life_history.individual_id,
+            "sex": individual.life_history.sex, "age_steps": individual.life_history.age_steps,
+            "generation": individual.life_history.generation,
             "x": individual.x, "y": individual.y,
             "health": individual.health, "hunger": individual.hunger,
             "thirst": individual.thirst, "stamina": individual.energy,
@@ -249,6 +257,8 @@ def run_single_simulation(
         social_decision_history=list(simulation.social_decision_history),
         physiology_activity_history=list(simulation.physiology_activity_history),
         carnivore_hunt_history=list(simulation.carnivore_hunt_history),
+        reproduction_events=list(simulation.reproduction_events),
+        reproduction_diagnostics=list(simulation.reproduction.diagnostics),
         human_physiology_history=[
             [{
                 "step": 0,

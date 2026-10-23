@@ -13,7 +13,7 @@ def main():
         height=100,
         food_density=0.02,
         obstacle_density=0.01,
-        vision_radius=6,
+        vision_radius=14,
         agent_count=10,
         herbivore_count=8,
         carnivore_count=3,

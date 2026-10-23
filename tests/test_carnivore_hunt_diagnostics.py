@@ -53,9 +53,31 @@ def test_ecosystem_audit_exports_carnivore_hunt_history_and_summary(tmp_path):
     assert history
     assert summary
     assert {"nearest_prey_distance", "visible_humans", "visible_herbivores", "attack_attempted",
-            "prey_killed", "hunger_reduction_from_meat", "termination_cause"}.issubset(history[0])
+            "prey_killed", "hunger_reduction_from_meat", "termination_cause",
+            "selected_prey_type", "selected_prey_id", "selected_prey_distance_progress",
+            "selected_prey_risk_score", "selected_prey_nearby_humans", "target_selection_reason",
+            "nearby_human_defenders", "attack_target_id", "attack_risk_score", "attack_nearby_humans",
+            "attack_selection_reason", "attack_skipped_reason", "retreat_decision", "retreat_reason",
+            "retreat_attempted", "retreat_success", "health_recovery_eligible",
+            "health_recovered_this_step", "health_recovery_source", "health_recovery_block_reason"}.issubset(history[0])
+    with (output / "runs.csv").open(encoding="utf-8-sig", newline="") as handle:
+        run_rows = list(csv.DictReader(handle))
+    assert {"herbivores_killed_by_humans", "herbivores_killed_by_carnivores",
+            "carnivore_prey_killed_from_hunt_history", "carnivore_prey_killed_from_death_causes",
+            "carnivore_kill_accounting_delta", "human_predation_accounting_delta",
+            "herbivore_predation_accounting_delta", "carnivore_kill_accounting_valid"}.issubset(run_rows[0])
+    assert int(run_rows[0]["carnivore_kill_accounting_delta"]) == 0
+    assert int(run_rows[0]["carnivore_kill_accounting_valid"]) == 1
     assert summary[0]["individual_id"] == "C001"
     assert int(summary[0]["steps_observed"]) > 0
+    with (output / "activity_summary.csv").open(encoding="utf-8-sig", newline="") as handle:
+        activity_summary = list(csv.DictReader(handle))
+    assert activity_summary
+    assert {"health_recovered_this_step_sum", "health_recovery_steps",
+            "health_recovery_blocked_damage_steps", "health_recovery_blocked_need_steps"}.issubset(activity_summary[0])
+    assert {"hunt_episodes", "distinct_prey_targeted", "target_switches",
+            "mean_selected_prey_distance_progress", "retreat_decisions", "retreat_attempts",
+            "successful_retreats", "health_recovered_total", "health_recovery_steps"}.issubset(summary[0])
 
 
 def test_audit_death_cause_counts_are_exclusive_and_keep_contributing_damage(tmp_path):
@@ -103,3 +125,64 @@ def test_defense_death_with_starvation_damage_is_counted_as_defense_only():
     assert summary["death_cause"] == "DEFENSE"
     assert summary["starvation_death"] is False
     assert summary["starvation_damage_present_at_death"] is True
+
+
+def test_carnivore_hunt_summary_splits_episodes_when_prey_identity_changes():
+    from run_ecosystem_audit import _carnivore_hunt_summary
+
+    records = [
+        {"individual_id": "C001", "step": 1, "selected_prey_id": "V001", "selected_prey_distance_progress": 1},
+        {"individual_id": "C001", "step": 2, "selected_prey_id": "V001", "selected_prey_distance_progress": 0},
+        {"individual_id": "C001", "step": 3, "selected_prey_id": "V002", "selected_prey_distance_progress": -1},
+        {"individual_id": "C001", "step": 4, "selected_prey_id": "", "selected_prey_distance_progress": ""},
+        {"individual_id": "C001", "step": 5, "selected_prey_id": "V002", "selected_prey_distance_progress": 2},
+    ]
+
+    summary = _carnivore_hunt_summary(1, 123, records)[0]
+
+    assert summary["hunt_episodes"] == 3
+    assert summary["distinct_prey_targeted"] == 2
+    assert summary["target_switches"] == 1
+    assert summary["mean_selected_prey_distance_progress"] == 0.5
+    assert summary["steps_selected_prey_distance_increased"] == 1
+    assert summary["steps_selected_prey_distance_unchanged"] == 1
+
+
+def test_carnivore_kill_accounting_distinguishes_human_hunts_from_predation():
+    from run_ecosystem_audit import _carnivore_kill_accounting
+
+    records = [
+        {"prey_killed": True, "attack_target_type": "HUMAN"},
+        {"prey_killed": False, "attack_target_type": "HERBIVORE"},
+        {"prey_killed": True, "attack_target_type": "HERBIVORE"},
+    ]
+    counts = _carnivore_kill_accounting(
+        records,
+        human_deaths_predation=1,
+        herbivore_deaths_predation=1,
+        herbivore_deaths_hunting=5,
+    )
+
+    assert counts["herbivores_killed_by_humans"] == 5
+    assert counts["herbivores_killed_by_carnivores"] == 1
+    assert counts["carnivore_prey_killed_from_hunt_history"] == 2
+    assert counts["carnivore_prey_killed_from_death_causes"] == 2
+    assert counts["carnivore_kill_accounting_delta"] == 0
+    assert counts["human_predation_accounting_delta"] == 0
+    assert counts["herbivore_predation_accounting_delta"] == 0
+    assert counts["carnivore_kill_accounting_valid"] == 1
+
+
+def test_carnivore_kill_accounting_detects_species_level_mismatch():
+    from run_ecosystem_audit import _carnivore_kill_accounting
+
+    counts = _carnivore_kill_accounting(
+        [{"prey_killed": True, "attack_target_type": "HUMAN"}],
+        human_deaths_predation=0,
+        herbivore_deaths_predation=1,
+        herbivore_deaths_hunting=0,
+    )
+    assert counts["carnivore_kill_accounting_delta"] == 0
+    assert counts["human_predation_accounting_delta"] == 1
+    assert counts["herbivore_predation_accounting_delta"] == -1
+    assert counts["carnivore_kill_accounting_valid"] == 0

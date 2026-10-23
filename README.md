@@ -223,3 +223,6 @@ O limite de plantas regeneradas também é proporcional à área e usa uma refer
 ## Atributos individuais
 
 O modelo inicial de atributos biológicos, perfis por espécie, variação individual e capacidades derivadas está documentado em [`docs/AGENT_ATTRIBUTES.md`](docs/AGENT_ATTRIBUTES.md). A variação pode ser controlada por `SimulationConfig.attribute_variation` ou pela opção `--attribute-variation` da auditoria.
+## Observabilidade biológica e retirada de carnívoros
+
+As regras puras de retirada e recuperação de saúde ficam em `simulation/carnivore_decisions.py` e `simulation/health_recovery.py`. Os campos novos de auditoria e a semântica dos denominadores estão documentados em [`docs/OBSERVABILIDADE_BIOLOGICA_E_DECISOES.md`](docs/OBSERVABILIDADE_BIOLOGICA_E_DECISOES.md). Para evitar que resultados de auditorias com cópias de testes sejam coletados como testes do projeto, `pytest.ini` limita a descoberta ao diretório `tests/`.

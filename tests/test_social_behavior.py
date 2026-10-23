@@ -67,7 +67,7 @@ def test_low_sociability_does_not_seek_social_target():
 
     agent.choose_action([], world)
 
-    assert agent.target is None
+    assert agent.target_intent != "SOCIAL_APPROACH"
 
 
 def test_simulation_updates_visible_social_neighbors_each_step():
@@ -236,3 +236,18 @@ def test_social_behavior_config_rejects_invalid_memory_settings():
         SocialBehaviorConfig(memory_ttl_steps=0).validate()
     with pytest.raises(ValueError):
         SocialBehaviorConfig(reunion_affinity_threshold=1.1).validate()
+
+
+def test_social_relationship_update_handles_pair_without_preinitialized_counter():
+    """Regression for KeyError when a pair appears without a counter entry."""
+    world = World(width=12, height=8, food_count=0, obstacle_count=0, rng=random.Random(91))
+    first = Agent(2, 2, agent_id="H001")
+    second = Agent(4, 2, agent_id="H011")
+    simulation = Simulation(world, agents=[first, second], seed_spawn_count=0)
+    pair = tuple(sorted((first.agent_id, second.agent_id)))
+    simulation.social_pair_encounters.pop(pair, None)
+
+    simulation._update_social_relationships([first, second])
+
+    assert simulation.social_history[-1]["cumulative_close_steps_for_pair"] == 1
+    assert simulation.social_pair_encounters[pair] == 1

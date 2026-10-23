@@ -7,6 +7,7 @@ from environment.cell import Cell
 from environment.world import World
 from agents.navigation.bfs import find_path
 from agents.navigation.service import NavigationService
+from agents.navigation.exploration import choose_exploration_waypoint
 from agents.target_selector import TargetSelector
 from agents.needs import AgentNeeds
 from environment.resources import MaterialKind, MaterialResource, Water, Plant, Food
@@ -83,12 +84,13 @@ class Agent:
         self.alive = self.needs.alive
 
         self.vision_radius = (
-            self.attributes.adjusted_radius(self.species, vision_radius)
+            max(vision_radius - 2, self.attributes.adjusted_radius(self.species, vision_radius))
             if attributes is not None else vision_radius
         )
-        # A corrida pode cobrir uma ou duas células conforme a agilidade individual.
-        self.run_distance = 2 if self.attributes.agility >= 0.5 else 1
+        # Corrida ampliada: três ou quatro células conforme a agilidade individual.
+        self.run_distance = 4 if self.attributes.agility >= 0.5 else 3
         self.visit_counts: dict[Position, int] = {}
+        self.exploration_target: Position | None = None
 
         self.inventory = inventory if inventory is not None else Inventory()
         if personality is None:
@@ -635,25 +637,52 @@ class Agent:
             target=current_position,
         ))
 
-        # Exploração é uma alternativa real, mas não deve automaticamente
-        # superar uma necessidade importante só por haver uma célula inédita.
-        possible_moves = ((0, -1), (0, 1), (-1, 0), (1, 0))
-        for dx, dy in possible_moves:
-            target = (self.x + dx, self.y + dy)
-            if not world.is_walkable(*target):
-                continue
-            visit_score = self._exploration_score(target)
-            novelty = 1.0 / (1.0 + visit_score)
+        # Exploração é uma rota persistente até uma região distante e pouco
+        # visitada, em vez de escolher uma direção local aleatória a cada passo.
+        exploration_plan = None
+        if self.target_intent == "EXPLORATION" and self.target is not None:
+            if self.target != current_position and self.path and current_position in self.path:
+                index = self.path.index(current_position)
+                remaining_path = self.path[index:]
+                if len(remaining_path) > 1:
+                    exploration_plan = (self.target, remaining_path)
+        if exploration_plan is None:
+            exploration_plan = choose_exploration_waypoint(
+                world, current_position, pathfinder, self.rng, self.visit_counts,
+                min_distance=max(10, self.vision_radius),
+                max_distance=max(18, min(max(world.width, world.height) // 2, 45)),
+                candidate_limit=20,
+            )
+        if exploration_plan is not None:
+            target, route = exploration_plan
+        else:
+            # Mundos pequenos ou cercados podem não ter waypoint distante;
+            # nesse caso a exploração local continua disponível.
+            local_options = [
+                (self.x + dx, self.y + dy)
+                for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0))
+                if world.is_walkable(self.x + dx, self.y + dy)
+            ]
+            local_options.sort(key=lambda pos: (self._exploration_score(pos), pos[1], pos[0]))
+            if local_options:
+                target = local_options[0]
+                route = [current_position, target]
+            else:
+                target, route = None, []
+        if target is not None and len(route) > 1:
+            distance = max(1, len(route) - 1)
+            novelty = 1.0 / (1.0 + self._exploration_score(target, radius=5))
             candidates.append(ActionCandidate(
                 action_id="EXPLORE",
                 intent="EXPLORATION",
-                expected_benefit=0.15 + 0.25 * novelty,
-                opportunity=0.50 * novelty,
-                cost=min(1.0, 0.08 + 0.35 * fatigue_need),
+                expected_benefit=0.18 + 0.27 * novelty,
+                opportunity=0.42 * novelty,
+                cost=min(1.0, 0.05 + 0.22 * fatigue_need + distance / 150.0),
                 exploration_value=novelty,
                 continues_current_goal=self.target_intent == "EXPLORATION",
                 target=target,
-                metadata={"movement": (dx, dy), "visit_score": visit_score},
+                metadata={"path": route, "movement": (route[1][0] - route[0][0], route[1][1] - route[0][1]),
+                          "distance": distance, "visit_score": self._exploration_score(target, radius=5)},
             ))
 
         if not candidates:
@@ -705,10 +734,8 @@ class Agent:
         self.path = list(action.metadata.get("path", []))
         self._waiting_selected = False
         if action.action_id == "EXPLORE":
-            # Exploração é uma ação direta de um passo, sem criar um alvo
-            # persistente que possa ser confundido com uma rota para recurso.
-            self._clear_target()
-            self._waiting_selected = False
+            self.target_intent = "EXPLORATION"
+            self.exploration_target = action.target
             self._selected_movement = action.metadata["movement"]
             self.last_behavior_intent = action.intent
             return
@@ -892,7 +919,15 @@ class Agent:
         if self.building_intent and self.target == current_position:
             return (0, 0)
 
-        # Descarta a posição atual do início da rota.
+        # Sincroniza a rota persistente com a posição real. Uma corrida pode
+        # consumir vários waypoints em um único passo; não podemos continuar
+        # usando um prefixo já percorrido.
+        if self.path:
+            if current_position in self.path:
+                self.path = self.path[self.path.index(current_position):]
+            elif self.target is not None and self.target_intent == "EXPLORATION":
+                refreshed_path = pathfinder(world, current_position, self.target)
+                self.path = refreshed_path or []
         if self.path and self.path[0] == current_position:
             self.path.pop(0)
 
@@ -981,7 +1016,7 @@ class Agent:
     def _exploration_score(
         self,
         position: Position,
-        radius: int = 2,
+        radius: int = 5,
     ) -> float:
         center_x, center_y = position
         score = 0.0

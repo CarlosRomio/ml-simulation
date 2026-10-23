@@ -110,8 +110,8 @@ def _activity_summary(run_index: int, seed: int, records: list[dict]) -> list[di
     output = []
     numeric_fields = (
         "distance", "stamina_spent_movement", "stamina_spent_combat",
-        "stamina_recovered_rest", "stamina_recovered", "hunger_metabolic_cost", "thirst_metabolic_cost",
-        "fatigue_before", "fatigue_after", "fatigue_delta",
+        "stamina_recovered_rest", "stamina_recovered", "health_recovered_this_step",
+        "hunger_metabolic_cost", "thirst_metabolic_cost", "fatigue_before", "fatigue_after", "fatigue_delta",
         "hunger_before", "hunger_after", "thirst_before", "thirst_after",
         "stamina_before", "stamina_after",
     )
@@ -141,6 +141,13 @@ def _activity_summary(run_index: int, seed: int, records: list[dict]) -> list[di
             float(r.get("thirst_after", 0) or 0) >= 80 for r in group
         )
         row["sleep_interruptions"] = sum(bool(r.get("sleep_interruption_reason")) for r in group)
+        row["health_recovery_steps"] = sum(float(r.get("health_recovered_this_step", 0) or 0) > 0 for r in group)
+        row["health_recovery_blocked_damage_steps"] = sum(
+            str(r.get("health_recovery_block_reason", "")) == "DAMAGE_THIS_STEP" for r in group
+        )
+        row["health_recovery_blocked_need_steps"] = sum(
+            str(r.get("health_recovery_block_reason", "")) == "CRITICAL_NEED" for r in group
+        )
         row["deaths_observed"] = sum(
             float(r.get("health_after", 100) or 0) <= 0
             and str(r.get("termination_cause", "RUNNING")) not in {"RUNNING", ""}
@@ -183,6 +190,7 @@ def _target_progress_episodes(run_index: int, seed: int, records: list[dict]) ->
                 "run": run_index, "seed": seed, "individual_type": species,
                 "individual_id": individual_id,
                 "target_intent": str(first.get("target_intent_before_action", "NONE") or "NONE"),
+                "target_agent_id": first.get("target_agent_id", ""),
                 "target_x_start": first.get("target_x_before_action", ""),
                 "target_y_start": first.get("target_y_before_action", ""),
                 "target_x_end": last.get("target_x_before_action", ""),
@@ -216,7 +224,11 @@ def _target_progress_episodes(run_index: int, seed: int, records: list[dict]) ->
                 continue
             # Presas são móveis: para carnívoros em caça, uma mudança de
             # coordenada não significa que a identidade do objetivo mudou.
-            signature = (intent,) if species == "CARNIVORE" and intent == "HUNT" else (intent, int(x), int(y))
+            if species == "CARNIVORE" and intent == "HUNT":
+                prey_id = str(row.get("target_agent_id", "") or "")
+                signature = (intent, prey_id) if prey_id else (intent,)
+            else:
+                signature = (intent, int(x), int(y))
             if current and (signature != current_signature or int(row.get("step", 0) or 0) != int(current[-1].get("step", 0) or 0) + 1):
                 finish("TARGET_CHANGED")
             if not current:
@@ -339,6 +351,8 @@ def _is_audit_event(record: dict, previous_record: dict | None) -> str:
         reasons.append("DAMAGE")
     if str(record.get("sleep_interruption_reason", "")):
         reasons.append("SLEEP_INTERRUPTION")
+    if float(record.get("health_recovered_this_step", 0) or 0) > 0:
+        reasons.append("HEALTH_RECOVERY")
     movement_block_reason = str(record.get("movement_block_reason", ""))
     previous_movement_block_reason = str(previous_record.get("movement_block_reason", "")) if previous_record else ""
     if movement_block_reason and movement_block_reason != previous_movement_block_reason:
@@ -395,6 +409,47 @@ def _count_deaths_by_primary_cause(
     )
 
 
+def _carnivore_kill_accounting(
+    hunt_records: list[dict], *, human_deaths_predation: int, herbivore_deaths_predation: int,
+    herbivore_deaths_hunting: int,
+) -> dict[str, int]:
+    """Reconcilia abates registrados com mortes terminais, inclusive por espécie.
+
+    O histórico de caça e o registro de mortes são fontes distintas. As mortes
+    de herbívoros por humanos permanecem separadas da predação por carnívoros.
+    """
+    successful = [record for record in hunt_records if bool(record.get("prey_killed", False))]
+    history_kills = len(successful)
+    history_human_kills = sum(
+        str(record.get("attack_target_type", record.get("selected_prey_type", ""))).upper() == "HUMAN"
+        for record in successful
+    )
+    history_herbivore_kills = sum(
+        str(record.get("attack_target_type", record.get("selected_prey_type", ""))).upper() == "HERBIVORE"
+        for record in successful
+    )
+    human_deaths = int(human_deaths_predation)
+    herbivore_deaths = int(herbivore_deaths_predation)
+    death_cause_kills = human_deaths + herbivore_deaths
+    total_delta = history_kills - death_cause_kills
+    human_delta = history_human_kills - human_deaths
+    herbivore_delta = history_herbivore_kills - herbivore_deaths
+    valid = total_delta == 0 and human_delta == 0 and herbivore_delta == 0
+    return {
+        "herbivores_killed_by_humans": int(herbivore_deaths_hunting),
+        "herbivores_killed_by_carnivores": herbivore_deaths,
+        "humans_killed_by_carnivores": human_deaths,
+        "carnivore_prey_killed_from_hunt_history": history_kills,
+        "carnivore_prey_killed_from_death_causes": death_cause_kills,
+        "carnivore_kill_accounting_delta": total_delta,
+        "herbivore_predation_kills_from_hunt_history": history_herbivore_kills,
+        "herbivore_predation_accounting_delta": herbivore_delta,
+        "human_predation_kills_from_hunt_history": history_human_kills,
+        "human_predation_accounting_delta": human_delta,
+        "carnivore_kill_accounting_valid": int(valid),
+    }
+
+
 def _carnivore_hunt_summary(run_index: int, seed: int, records: list[dict]) -> list[dict]:
     """Resumo por carnívoro para localizar gargalos de caça e mortes fisiológicas."""
     groups: dict[str, list[dict]] = defaultdict(list)
@@ -413,6 +468,36 @@ def _carnivore_hunt_summary(run_index: int, seed: int, records: list[dict]) -> l
         death_records = [r for r in group if str(r.get("termination_cause", "RUNNING")) not in {"RUNNING", ""}]
         death = death_records[-1] if death_records else {}
         causes = set(str(death.get("damage_causes", "")).split(";"))
+        # Um episódio é uma sequência contígua de passos que mantém a mesma
+        # identidade de presa selecionada. Passos sem alvo encerram a sequência.
+        hunt_episodes: list[list[dict]] = []
+        active_episode: list[dict] = []
+        active_prey_id = ""
+        for record in group:
+            prey_id = str(record.get("selected_prey_id", "") or "")
+            if not prey_id:
+                if active_episode:
+                    hunt_episodes.append(active_episode)
+                    active_episode = []
+                active_prey_id = ""
+                continue
+            if active_episode and prey_id != active_prey_id:
+                hunt_episodes.append(active_episode)
+                active_episode = []
+            active_episode.append(record)
+            active_prey_id = prey_id
+        if active_episode:
+            hunt_episodes.append(active_episode)
+        episode_attacks = sum(any(bool(r.get("attack_attempted")) for r in episode) for episode in hunt_episodes)
+        episode_kills = sum(any(bool(r.get("prey_killed")) for r in episode) for episode in hunt_episodes)
+        prey_ids = {str(r.get("selected_prey_id")) for r in group if r.get("selected_prey_id")}
+        target_switches = sum(
+            bool(previous.get("selected_prey_id")) and bool(current.get("selected_prey_id"))
+            and str(previous.get("selected_prey_id")) != str(current.get("selected_prey_id"))
+            for previous, current in zip(group, group[1:])
+        )
+        prey_distance_progress = [number(r, "selected_prey_distance_progress") for r in group]
+        prey_distance_progress = [value for value in prey_distance_progress if value is not None]
         rows.append({
             "run": run_index, "seed": seed, "individual_id": individual_id,
             "steps_observed": len(group),
@@ -424,7 +509,31 @@ def _carnivore_hunt_summary(run_index: int, seed: int, records: list[dict]) -> l
             "nearest_prey_distance_mean": mean(nearest_distances) if nearest_distances else "",
             "attacks": sum(bool(r.get("attack_attempted")) for r in group),
             "prey_killed": sum(bool(r.get("prey_killed")) for r in group),
+            "hunt_episodes": len(hunt_episodes),
+            "distinct_prey_targeted": len(prey_ids),
+            "episodes_with_attack": episode_attacks,
+            "episodes_with_kill": episode_kills,
+            "target_switches": target_switches,
+            "mean_selected_prey_distance_progress": mean(prey_distance_progress) if prey_distance_progress else "",
+            "steps_selected_prey_distance_increased": sum(value < 0 for value in prey_distance_progress),
+            "steps_selected_prey_distance_unchanged": sum(value == 0 for value in prey_distance_progress),
             "meat_hunger_reduction_total": sum(number(r, "hunger_reduction_from_meat") or 0 for r in group),
+            "retreat_decisions": sum(bool(r.get("retreat_decision")) for r in group),
+            "retreat_attempts": sum(bool(r.get("retreat_attempted")) for r in group),
+            "successful_retreats": sum(bool(r.get("retreat_success")) for r in group),
+            "retreat_success_rate": (
+                sum(bool(r.get("retreat_success")) for r in group)
+                / max(1, sum(bool(r.get("retreat_attempted")) for r in group))
+            ),
+            "health_recovered_total": sum(number(r, "health_recovered_this_step") or 0 for r in group),
+            "health_recovery_steps": sum((number(r, "health_recovered_this_step") or 0) > 0 for r in group),
+            "health_recovery_eligible_steps": sum(bool(r.get("health_recovery_eligible")) for r in group),
+            "health_recovery_blocked_damage_steps": sum(
+                str(r.get("health_recovery_block_reason", "")) == "DAMAGE_THIS_STEP" for r in group
+            ),
+            "health_recovery_blocked_need_steps": sum(
+                str(r.get("health_recovery_block_reason", "")) == "CRITICAL_NEED" for r in group
+            ),
             "defense_attacks_received": sum(int(r.get("defense_attacks_received", 0) or 0) for r in group),
             "damage_received_from_defense": sum(number(r, "damage_received_from_defense") or 0 for r in group),
             # Causa primária é exclusiva; causas contribuintes ficam separadas.
@@ -669,6 +778,67 @@ def _resource_access_episode_rows(run_index: int, seed: int, records: list[dict]
     return output
 
 
+
+def _spatial_coverage_summary(run_index: int, seed: int, records: list[dict],
+                              width: int, height: int) -> list[dict]:
+    """Resume cobertura espacial por indivíduo usando o histórico completo."""
+    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for record in records:
+        species = str(record.get("individual_type", ""))
+        individual_id = str(record.get("individual_id", ""))
+        if species and individual_id and record.get("x") not in (None, "") and record.get("y") not in (None, ""):
+            groups[(species, individual_id)].append(record)
+
+    world_cells = max(1, width * height)
+    output: list[dict] = []
+    for (species, individual_id), rows in sorted(groups.items()):
+        visited = set()
+        repeat_observations = 0
+        total_distance = 0.0
+        moving_observations = 0
+        exploration_observations = 0
+        running_observations = 0
+        resting_observations = 0
+        for row in rows:
+            try:
+                position = (int(row["x"]), int(row["y"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+            if position in visited:
+                repeat_observations += 1
+            visited.add(position)
+            try:
+                distance = float(row.get("distance", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                distance = 0.0
+            total_distance += distance
+            moving_observations += distance > 0
+            activity = str(row.get("activity", "")).upper()
+            running_observations += activity == "RUNNING"
+            resting_observations += activity in {"RESTING", "SLEEPING"}
+            intents = {
+                str(row.get("behavior_intent", "")).upper(),
+                str(row.get("target_intent_before_action", "")).upper(),
+                str(row.get("action_reason", "")).upper(),
+            }
+            exploration_observations += bool(intents.intersection({"EXPLORATION", "EXPLORING"}))
+        observations = len(rows)
+        output.append({
+            "run": run_index, "seed": seed, "individual_type": species,
+            "individual_id": individual_id, "observations": observations,
+            "unique_cells_visited": len(visited), "world_cells": world_cells,
+            "world_coverage_ratio": len(visited) / world_cells,
+            "repeat_visit_observations": repeat_observations,
+            "repeat_visit_ratio": repeat_observations / observations if observations else 0.0,
+            "total_distance": total_distance,
+            "mean_distance_per_observation": total_distance / observations if observations else 0.0,
+            "moving_observations": int(moving_observations),
+            "running_observations": int(running_observations),
+            "resting_or_sleeping_observations": int(resting_observations),
+            "exploration_intent_observations": int(exploration_observations),
+        })
+    return output
+
 def _resource_access_episode_summary(episodes: list[dict]) -> list[dict]:
     groups: dict[tuple[int, int, str, str], list[dict]] = defaultdict(list)
     for row in episodes:
@@ -710,6 +880,9 @@ def _run_worker(task: tuple) -> dict:
     elapsed = time.perf_counter() - started
     shard = Path(shard_dir)
     activity = result.physiology_activity_history
+    spatial_coverage_rows = _spatial_coverage_summary(
+        run_index, seed, activity, config.width, config.height
+    )
     target_episodes = _target_progress_episodes(run_index, seed, activity)
     target_progress_summaries = _target_progress_summary(run_index, seed, target_episodes)
     _write_csv(shard / f"target_progress_episodes_{run_index:04d}.csv", target_episodes)
@@ -745,15 +918,19 @@ def _run_worker(task: tuple) -> dict:
     _write_csv(shard / f"social_decisions_{run_index:04d}.csv", [
         {"run": run_index, "seed": seed, **row} for row in result.social_decision_history
     ])
+    reproduction_rows = [{"run": run_index, "seed": seed, **row} for row in result.reproduction_events]
+    _write_csv(shard / f"reproduction_events_{run_index:04d}.csv", reproduction_rows)
+    reproduction_diagnostic_rows = [
+        {"run": run_index, "seed": seed, **row}
+        for row in result.reproduction_diagnostics
+    ]
+    _write_csv(shard / f"reproduction_diagnostics_{run_index:04d}.csv", reproduction_diagnostic_rows)
     hunt_rows = [{"run": run_index, "seed": seed, **row} for row in result.carnivore_hunt_history]
     _write_csv(shard / f"carnivore_history_{run_index:04d}.csv", hunt_rows)
     hunt_summary = _carnivore_hunt_summary(run_index, seed, hunt_rows)
     _write_csv(shard / f"carnivore_summary_{run_index:04d}.csv", hunt_summary)
     resource_summary = _resource_access_summary(run_index, seed, activity)
     _write_csv(shard / f"resource_access_summary_{run_index:04d}.csv", resource_summary)
-    resource_episodes = _resource_access_episode_rows(run_index, seed, activity)
-    _write_csv(shard / f"resource_access_episodes_{run_index:04d}.csv", resource_episodes)
-    _write_csv(shard / f"resource_access_episode_summary_{run_index:04d}.csv", _resource_access_episode_summary(resource_episodes))
     resource_episodes = _resource_access_episode_rows(run_index, seed, activity)
     _write_csv(shard / f"resource_access_episodes_{run_index:04d}.csv", resource_episodes)
     _write_csv(shard / f"resource_access_episode_summary_{run_index:04d}.csv", _resource_access_episode_summary(resource_episodes))
@@ -828,6 +1005,12 @@ def _run_worker(task: tuple) -> dict:
         "human_defense_attacks": result.human_defense_attacks,
         "herbivores_killed": result.herbivores_killed,
         "humans_killed_by_carnivores": result.humans_killed_by_carnivores,
+        **_carnivore_kill_accounting(
+            result.carnivore_hunt_history,
+            human_deaths_predation=human_causes.count("PREDATION"),
+            herbivore_deaths_predation=death_count("HERBIVORE", "PREDATION"),
+            herbivore_deaths_hunting=death_count("HERBIVORE", "HUNTING"),
+        ),
         "carnivores_killed": result.carnivores_killed,
         "food_collected_population": result.population_food_collected,
         "activity_records_full_resolution": len(activity),
@@ -840,7 +1023,8 @@ def _run_worker(task: tuple) -> dict:
     }
     return {"run_row": run_row, "activity_summaries": summaries,
             "action_reason_summaries": reason_summaries,
-            "target_progress_summaries": target_progress_summaries}
+            "target_progress_summaries": target_progress_summaries,
+            "spatial_coverage_rows": spatial_coverage_rows}
 
 
 def _combine_activity_summaries(rows: list[dict]) -> list[dict]:
@@ -851,13 +1035,17 @@ def _combine_activity_summaries(rows: list[dict]) -> list[dict]:
             "individual_type": key[0], "activity": key[1], "observations": 0,
             "moved_observations": 0, "low_stamina_observations": 0,
             "critical_hunger_observations": 0, "critical_thirst_observations": 0,
-            "sleep_interruptions": 0, "deaths_observed": 0,
+            "sleep_interruptions": 0, "health_recovery_steps": 0,
+            "health_recovery_blocked_damage_steps": 0, "health_recovery_blocked_need_steps": 0,
+            "deaths_observed": 0,
         })
         n = int(row["observations"])
         target["observations"] += n
         for field in ("moved_observations", "low_stamina_observations",
                       "critical_hunger_observations", "critical_thirst_observations",
-                      "sleep_interruptions", "deaths_observed"):
+                      "sleep_interruptions", "health_recovery_steps",
+                      "health_recovery_blocked_damage_steps", "health_recovery_blocked_need_steps",
+                      "deaths_observed"):
             target[field] += int(row.get(field, 0))
         for field, value in row.items():
             if field.endswith("_sum"):
@@ -884,6 +1072,10 @@ def run_audit(*, runs: int, steps: int, seed: int, workers: int,
     if runs < 1 or steps < 1 or workers < 1 or sample_every < 1:
         raise ValueError("runs, steps, workers e sample_every devem ser positivos.")
     config.validate()
+    requested_workers = workers
+    # Não cria processos ociosos: cada worker executa uma réplica completa.
+    # Também respeita o número de CPUs visíveis para o processo.
+    workers = min(requested_workers, runs, os.cpu_count() or 1)
     if max_plants is None:
         max_plants = config.max_plants_capacity
     elif max_plants < 0:
@@ -921,16 +1113,21 @@ def run_audit(*, runs: int, steps: int, seed: int, workers: int,
         row for item in worker_results for row in item["target_progress_summaries"]
     ])
     _write_csv(output_dir / "target_progress_summary.csv", target_progress_summary_rows)
+    spatial_coverage_rows = [
+        row for item in worker_results for row in item["spatial_coverage_rows"]
+    ]
+    _write_csv(output_dir / "spatial_coverage_summary.csv", spatial_coverage_rows)
 
     shard_outputs = (
-        ("target_progress_episodes_", "target_progress_episodes.csv", ["run", "seed", "individual_type", "individual_id", "target_intent", "start_step", "end_step", "duration_steps", "start_distance", "end_distance", "net_distance_progress", "target_reached", "need_satisfied", "outcome"]),
+        ("target_progress_episodes_", "target_progress_episodes.csv", ["run", "seed", "individual_type", "individual_id", "target_intent", "target_agent_id", "start_step", "end_step", "duration_steps", "start_distance", "end_distance", "net_distance_progress", "target_reached", "need_satisfied", "outcome"]),
         ("activity_sampled_", "activity_sampled.csv", ["run", "seed", "step", "individual_type", "individual_id", "sample_reason",
-         "x", "y", "activity", "behavior_intent", "action_reason", "decision_action_id",
+         "x", "y", "activity", "behavior_intent", "action_reason", "decision_action_id", "target_agent_id",
          "moved", "distance", "movement_block_reason", "target_intent_before_action",
          "target_x_before_action", "target_y_before_action", "target_distance_before_action",
          "target_distance_after_action", "target_distance_progress", "target_in_interaction_range",
          "target_reached", "need_satisfied_this_step", "stamina_before", "stamina_after",
          "hunger_before", "hunger_after", "thirst_before", "thirst_after", "health_before", "health_after",
+         "health_recovered_this_step", "health_recovery_source", "health_recovery_block_reason",
          "resource_need_priority", "resource_need_priority_before_action", "resource_access_target_kind_before_action",
          "resource_access_target_x_before_action", "resource_access_target_y_before_action",
          "nearest_water_distance_manhattan", "nearest_mature_plant_distance_manhattan",
@@ -941,12 +1138,13 @@ def run_audit(*, runs: int, steps: int, seed: int, workers: int,
          "food_consumption_succeeded", "urgent_thirst_without_water_in_vision",
          "urgent_hunger_without_food_in_vision", "resource_access_outcome", "termination_cause"]),
         ("activity_events_", "activity_events.csv", [field for field in ["run", "seed", "step", "individual_type", "individual_id", "sample_reason",
-         "x", "y", "activity", "behavior_intent", "action_reason", "decision_action_id",
+         "x", "y", "activity", "behavior_intent", "action_reason", "decision_action_id", "target_agent_id",
          "moved", "distance", "movement_block_reason", "target_intent_before_action",
          "target_x_before_action", "target_y_before_action", "target_distance_before_action",
          "target_distance_after_action", "target_distance_progress", "target_in_interaction_range",
          "target_reached", "need_satisfied_this_step", "stamina_before", "stamina_after",
          "hunger_before", "hunger_after", "thirst_before", "thirst_after", "health_before", "health_after",
+         "health_recovered_this_step", "health_recovery_source", "health_recovery_block_reason",
          "resource_need_priority", "resource_need_priority_before_action", "resource_access_target_kind_before_action",
          "resource_access_target_x_before_action", "resource_access_target_y_before_action",
          "nearest_water_distance_manhattan", "nearest_mature_plant_distance_manhattan",
@@ -956,7 +1154,7 @@ def run_audit(*, runs: int, steps: int, seed: int, workers: int,
          "at_water_source", "at_food_source", "water_consumption_succeeded", "food_acquisition_succeeded",
          "food_consumption_succeeded", "urgent_thirst_without_water_in_vision",
          "urgent_hunger_without_food_in_vision", "resource_access_outcome", "termination_cause"] if field != "sample_reason"] + ["event_reason"]),
-        ("initial_states_", "initial_states.csv", ["run", "seed", "individual_type", "individual_id", "x", "y", "health", "hunger", "thirst", "stamina", "fatigue", "is_sleeping", "attribute_strength", "attribute_agility", "attribute_constitution", "attribute_endurance", "attribute_vision", "attribute_olfaction", "attribute_intelligence", "attribute_memory", "attribute_metabolic_efficiency", "gene_strength", "gene_agility", "gene_constitution", "gene_endurance", "gene_vision", "gene_olfaction", "gene_intelligence", "gene_memory", "gene_metabolic_efficiency"]),
+        ("initial_states_", "initial_states.csv", ["run", "seed", "individual_type", "individual_id", "sex", "age_steps", "generation", "x", "y", "health", "hunger", "thirst", "stamina", "fatigue", "is_sleeping", "attribute_strength", "attribute_agility", "attribute_constitution", "attribute_endurance", "attribute_vision", "attribute_olfaction", "attribute_intelligence", "attribute_memory", "attribute_metabolic_efficiency", "gene_strength", "gene_agility", "gene_constitution", "gene_endurance", "gene_vision", "gene_olfaction", "gene_intelligence", "gene_memory", "gene_metabolic_efficiency"]),
         ("population_", "population_history.csv", ["run", "seed", "step"]),
         ("ecology_", "ecology_history.csv", ["run", "seed", "step"]),
         ("social_decisions_", "social_decisions.csv", [
@@ -965,13 +1163,50 @@ def run_audit(*, runs: int, steps: int, seed: int, workers: int,
             "y_before", "x_after", "y_after", "action_dx", "action_dy", "moved",
             "sociability", "hunger", "thirst", "energy",
         ]),
+        ("reproduction_events_", "reproduction_events.csv", [
+            "run", "seed", "step", "event", "species", "individual_id",
+            "parent_a", "parent_b", "generation", "sex", "x", "y", "reason",
+            "parent_a_x", "parent_a_y", "parent_b_x", "parent_b_y",
+            "distance_manhattan", "parent_a_energy_after_cost", "parent_b_energy_after_cost",
+            "gestation_steps", "cooldown_steps",
+            "gene_strength", "gene_agility", "gene_constitution", "gene_endurance",
+            "gene_vision", "gene_olfaction", "gene_intelligence", "gene_memory",
+            "gene_metabolic_efficiency",
+        ]),
+        ("reproduction_diagnostics_", "reproduction_diagnostics.csv", [
+            "run", "seed", "step", "species", "population_alive", "eligible_for_mating",
+            "eligible_females", "eligible_males", "immature_count", "cooldown_count",
+            "pregnant_count", "hunger_blocked_count", "thirst_blocked_count",
+            "energy_blocked_count", "health_blocked_count", "seeking_mate_count",
+            "matings_this_step", "births_this_step", "births_blocked_this_step",
+            "deaths_old_age_this_step",
+        ]),
         ("carnivore_history_", "carnivore_hunt_history.csv", [
             "run", "seed", "step", "individual_type", "individual_id", "hunger_before",
             "hunger_after", "nearest_prey_distance", "visible_humans", "visible_herbivores",
-            "attack_attempted", "prey_killed", "termination_cause",
+            "selected_prey_type", "selected_prey_id", "selected_prey_risk_score",
+            "selected_prey_nearby_humans", "target_selection_reason",
+            "selected_prey_x_before_action", "selected_prey_y_before_action",
+            "selected_prey_distance_before_action", "selected_prey_distance_after_move",
+            "selected_prey_distance_progress", "hunt_stagnation_steps", "hunt_target_switches",
+            "hunt_position_history_size", "hunt_target_x", "hunt_target_y",
+            "health_fraction_before_action", "human_threat_count_within_2", "human_threat_count_adjacent",
+            "retreat_decision", "retreat_reason", "retreat_attempted", "retreat_success",
+            "retreat_min_human_distance_before", "retreat_min_human_distance_after",
+            "health_recovery_eligible", "health_recovered_this_step", "health_recovery_source",
+            "health_recovery_block_reason",
+            "nearby_human_defenders", "attack_risk_score", "attack_nearby_humans",
+            "attack_selection_reason", "attack_attempted", "attack_target_type",
+            "attack_target_id", "attack_skipped_reason", "prey_killed", "termination_cause",
         ]),
         ("carnivore_summary_", "carnivore_hunt_summary.csv", [
             "run", "seed", "individual_id", "steps_observed", "attacks", "prey_killed",
+            "hunt_episodes", "distinct_prey_targeted", "episodes_with_attack", "episodes_with_kill",
+            "target_switches", "mean_selected_prey_distance_progress",
+            "steps_selected_prey_distance_increased", "steps_selected_prey_distance_unchanged",
+            "retreat_decisions", "retreat_attempts", "successful_retreats", "retreat_success_rate",
+            "health_recovered_total", "health_recovery_steps", "health_recovery_eligible_steps",
+            "health_recovery_blocked_damage_steps", "health_recovery_blocked_need_steps",
             "starvation_death", "dehydration_death", "starvation_damage_present_at_death",
             "dehydration_damage_present_at_death", "death_step", "death_cause",
         ]),
@@ -1028,7 +1263,8 @@ def run_audit(*, runs: int, steps: int, seed: int, workers: int,
         "python_version": platform.python_version(),
         "simulation_clock_minutes_per_step": DEFAULT_PHYSIOLOGY_CONFIG.minutes_per_step,
         "physiology_config": asdict(DEFAULT_PHYSIOLOGY_CONFIG),
-        "workers": workers, "sample_every_steps": sample_every,
+        "workers": workers, "workers_requested": requested_workers,
+        "sample_every_steps": sample_every,
         "world_width": config.width, "world_height": config.height,
         "attribute_variation": config.attribute_variation,
         "genetic_model": {
@@ -1037,7 +1273,13 @@ def run_audit(*, runs: int, steps: int, seed: int, workers: int,
             "inheritance": "parental_mean_plus_gaussian_mutation",
             "mutation_rate_default": 0.02,
             "mutation_strength_default": 0.04,
-            "reproduction_enabled": False,
+            "reproduction_enabled": True,
+            "life_history_time_unit": "simulation_steps",
+            "life_history_scales": {
+                "human": {"maturity_steps": 500, "gestation_steps": 240, "cooldown_steps": 180},
+                "herbivore": {"maturity_steps": 220, "gestation_steps": 90, "cooldown_steps": 100},
+                "carnivore": {"maturity_steps": 280, "gestation_steps": 130, "cooldown_steps": 140},
+            },
         },
         "humans": config.agent_count, "herbivores": config.herbivore_count,
         "carnivores": config.carnivore_count,
@@ -1054,10 +1296,11 @@ def run_audit(*, runs: int, steps: int, seed: int, workers: int,
         },
         "compute_seconds": round(compute_seconds, 3),
         "runs_per_second": round(runs / compute_seconds, 3) if compute_seconds else 0.0,
-        "carnivore_diagnostics": "carnivore_hunt_history contém observações por carnívoro/passo; carnivore_hunt_summary resume caça, exposição a presas, estamina e causas de morte.",
+        "carnivore_diagnostics": "carnivore_hunt_history contém observações por carnívoro/passo, incluindo decisão/tentativa/sucesso de retirada e recuperação de saúde; carnivore_hunt_summary resume caça, retirada, cura, exposição a presas, estamina e causas de morte.",
         "target_progress_diagnostics": "target_progress_episodes.csv registra episódios consecutivos de alvo por indivíduo, duração, progresso de distância, bloqueios, alcance e satisfação de necessidade; target_progress_summary.csv agrega por espécie e intenção. Para carnívoros em HUNT, mudanças de coordenada são tratadas como movimento da presa, não troca de alvo.",
+        "reproduction_diagnostics": "reproduction_events.csv registra acasalamentos, nascimentos, nascimentos bloqueados e mortes por idade; reproduction_diagnostics.csv agrega elegibilidade, bloqueios fisiológicos, gestações e resultados por espécie e passo. Os tempos reprodutivos são escalas abstratas de prototipagem.",
         "resource_access_diagnostics": "activity_sampled.csv e activity_events.csv incluem distâncias Manhattan, recursos visíveis, alvo selecionado, sucesso de consumo, motivo de bloqueio de movimento e casos de necessidade urgente sem recurso visível; resource_access_summary.csv agrega eventos por execução e espécie (sucessos de aquisição/consumo são eventos por passo, não episódios); inclui eventos com e sem alvo/prioridade compatíveis. Para herbívoros, o alvo de recurso é capturado antes do movimento/consumo e a prioridade é registrada antes da ação, para preservar o alvo quando a planta é consumida no mesmo passo. resource_access_episodes.csv mede episódios de busca com prioridade ativa e encerra sucesso mesmo quando o alvo deixa de existir após o consumo; resource_access_episode_summary.csv agrega taxas de sucesso, latência e bloqueios por execução/espécie/recurso.",
-        "note": "activity_summary usa todos os registros; activity_sampled é amostrado; activity_events preserva eventos relevantes. As contagens de mortes por causa em runs.csv usam a causa terminal exclusiva; carnivore_hunt_summary também registra separadamente causas fisiológicas contribuintes. A instrumentação diagnóstica não altera decisões ou parâmetros da simulação. Distância Manhattan e presença no campo de visão não garantem caminho alcançável.",
+        "note": "activity_summary usa todos os registros e agora agrega cura de saúde por espécie/atividade; activity_sampled é amostrado; activity_events preserva eventos relevantes, incluindo HEALTH_RECOVERY. As contagens de mortes por causa em runs.csv usam a causa terminal exclusiva; carnivore_hunt_summary também registra separadamente causas fisiológicas contribuintes. herbivores_killed é o total de herbívoros mortos por caça humana ou predação; as colunas herbivores_killed_by_humans e herbivores_killed_by_carnivores separam as causas. carnivore_kill_accounting_delta deve ser zero: compara prey_killed no histórico de caça com mortes humanas+herbívoras por predação. A instrumentação diagnóstica não altera decisões ou parâmetros da simulação. Distância Manhattan e presença no campo de visão não garantem caminho alcançável.",
     }
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -1139,8 +1382,8 @@ def main() -> None:
           f"({manifest['runs_per_second']:.2f} execuções/s)")
     print(f"Resultados: {Path(result['output_dir']).resolve()}")
     print("Arquivos: runs.csv, activity_summary.csv, action_reason_summary.csv, target_progress_episodes.csv, target_progress_summary.csv, activity_sampled.csv, "
-          "activity_events.csv, initial_states.csv, population_history.csv, ecology_history.csv, "
-          "social_decisions.csv, carnivore_hunt_history.csv, carnivore_hunt_summary.csv, "
+          "activity_events.csv, spatial_coverage_summary.csv, initial_states.csv, population_history.csv, ecology_history.csv, "
+          "social_decisions.csv, carnivore_hunt_history.csv, carnivore_hunt_summary.csv, reproduction_events.csv, reproduction_diagnostics.csv, "
           "resource_access_summary.csv, resource_access_episodes.csv, "
           "resource_access_episode_summary.csv, manifest.json")
     print("\nResumo de atividade (todas as observações, não apenas a amostra):")
