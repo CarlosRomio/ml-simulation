@@ -148,6 +148,12 @@ def _activity_summary(run_index: int, seed: int, records: list[dict]) -> list[di
         row["health_recovery_blocked_need_steps"] = sum(
             str(r.get("health_recovery_block_reason", "")) == "CRITICAL_NEED" for r in group
         )
+        row["health_recovery_blocked_activity_steps"] = sum(
+            str(r.get("health_recovery_block_reason", "")) == "NOT_RESTING" for r in group
+        )
+        row["health_recovery_blocked_full_health_steps"] = sum(
+            str(r.get("health_recovery_block_reason", "")) == "HEALTH_FULL" for r in group
+        )
         row["deaths_observed"] = sum(
             float(r.get("health_after", 100) or 0) <= 0
             and str(r.get("termination_cause", "RUNNING")) not in {"RUNNING", ""}
@@ -450,6 +456,100 @@ def _carnivore_kill_accounting(
     }
 
 
+def _annotate_retreat_outcomes(
+    records: list[dict], *, window_steps: int = 3, threat_radius: int = 2,
+) -> list[dict]:
+    """Classifica retiradas pela exposição observada nos passos seguintes.
+
+    SUCCESS exige uma janela completa sem humanos dentro do raio de ameaça e
+    sem dano defensivo. Uma morte durante a janela é FAILURE; fim da execução
+    antes de completar a janela é CENSORED, nunca sucesso presumido.
+    """
+    if window_steps < 1:
+        raise ValueError("window_steps deve ser >= 1")
+
+    by_individual: dict[str, list[dict]] = defaultdict(list)
+    for row in records:
+        row.setdefault("retreat_immediate_distance_increased", False)
+        row.setdefault("retreat_outcome", "NOT_ATTEMPTED")
+        row.setdefault("retreat_followup_steps", 0)
+        row.setdefault("retreat_followup_threat_steps", 0)
+        row.setdefault("retreat_followup_attack_range_steps", 0)
+        row.setdefault("retreat_failure_reason", "")
+        row["retreat_sustained_success"] = False
+        row["retreat_success"] = False
+        by_individual[str(row.get("individual_id", ""))].append(row)
+
+    for individual_rows in by_individual.values():
+        individual_rows.sort(key=lambda row: int(row.get("step", 0) or 0))
+        for index, event in enumerate(individual_rows):
+            if not bool(event.get("retreat_attempted")):
+                continue
+            followup = individual_rows[index + 1:index + 1 + window_steps]
+            event["retreat_followup_steps"] = len(followup)
+            failure_reason = ""
+            threat_steps = 0
+            attack_range_steps = 0
+            for future in followup:
+                # Presence within the broad risk radius is context, not proof
+                # that a human can attack in this step. Prefer the simulation's
+                # explicit adjacency count; use distance only for legacy rows.
+                adjacent_value = future.get("human_threat_count_adjacent", None)
+                if adjacent_value not in (None, ""):
+                    try:
+                        attack_range = int(adjacent_value) > 0
+                    except (TypeError, ValueError):
+                        attack_range = False
+                else:
+                    distance_value = future.get("nearest_human_distance", "")
+                    try:
+                        attack_range = distance_value not in (None, "") and float(distance_value) <= 1
+                    except (TypeError, ValueError):
+                        attack_range = False
+                try:
+                    threat_count = future.get("human_threat_count_within_2", None)
+                    if threat_count not in (None, ""):
+                        within_risk_radius = int(threat_count) > 0
+                    else:
+                        distance_value = future.get("nearest_human_distance", "")
+                        within_risk_radius = distance_value not in (None, "") and float(distance_value) <= threat_radius
+                except (TypeError, ValueError):
+                    within_risk_radius = False
+                threat_steps += int(within_risk_radius)
+                attack_range_steps += int(attack_range)
+                try:
+                    defense_damage = float(future.get("damage_received_from_defense", 0) or 0)
+                except (TypeError, ValueError):
+                    defense_damage = 0.0
+                try:
+                    defense_attacks = int(future.get("defense_attacks_received", 0) or 0)
+                except (TypeError, ValueError):
+                    defense_attacks = 0
+                terminal = str(future.get("termination_cause", "RUNNING") or "RUNNING") not in {"RUNNING", ""}
+                if terminal:
+                    failure_reason = "DIED_DURING_FOLLOWUP"
+                elif defense_attacks > 0 or defense_damage > 0:
+                    failure_reason = "DEFENSE_DAMAGE_DURING_FOLLOWUP"
+                elif attack_range:
+                    failure_reason = "HUMAN_CAN_ATTACK_DURING_FOLLOWUP"
+                if failure_reason:
+                    break
+            event["retreat_followup_threat_steps"] = threat_steps
+            event["retreat_followup_attack_range_steps"] = attack_range_steps
+
+            if failure_reason:
+                event["retreat_outcome"] = "FAILURE"
+                event["retreat_failure_reason"] = failure_reason
+            elif len(followup) < window_steps:
+                event["retreat_outcome"] = "CENSORED"
+                event["retreat_failure_reason"] = "INCOMPLETE_FOLLOWUP_WINDOW"
+            else:
+                event["retreat_outcome"] = "SUCCESS"
+                event["retreat_sustained_success"] = True
+                event["retreat_success"] = True
+    return records
+
+
 def _carnivore_hunt_summary(run_index: int, seed: int, records: list[dict]) -> list[dict]:
     """Resumo por carnívoro para localizar gargalos de caça e mortes fisiológicas."""
     groups: dict[str, list[dict]] = defaultdict(list)
@@ -520,10 +620,16 @@ def _carnivore_hunt_summary(run_index: int, seed: int, records: list[dict]) -> l
             "meat_hunger_reduction_total": sum(number(r, "hunger_reduction_from_meat") or 0 for r in group),
             "retreat_decisions": sum(bool(r.get("retreat_decision")) for r in group),
             "retreat_attempts": sum(bool(r.get("retreat_attempted")) for r in group),
-            "successful_retreats": sum(bool(r.get("retreat_success")) for r in group),
+            "retreat_immediate_distance_increases": sum(bool(r.get("retreat_immediate_distance_increased")) for r in group),
+            "retreat_sustained_successes": sum(str(r.get("retreat_outcome", "")) == "SUCCESS" for r in group),
+            "retreat_failures": sum(str(r.get("retreat_outcome", "")) == "FAILURE" for r in group),
+            "retreat_censored": sum(str(r.get("retreat_outcome", "")) == "CENSORED" for r in group),
+            "retreat_successful_retreats": sum(str(r.get("retreat_outcome", "")) == "SUCCESS" for r in group),
+            "successful_retreats": sum(str(r.get("retreat_outcome", "")) == "SUCCESS" for r in group),
+            "retreat_resolved_attempts": sum(str(r.get("retreat_outcome", "")) in {"SUCCESS", "FAILURE"} for r in group),
             "retreat_success_rate": (
-                sum(bool(r.get("retreat_success")) for r in group)
-                / max(1, sum(bool(r.get("retreat_attempted")) for r in group))
+                sum(str(r.get("retreat_outcome", "")) == "SUCCESS" for r in group)
+                / max(1, sum(str(r.get("retreat_outcome", "")) in {"SUCCESS", "FAILURE"} for r in group))
             ),
             "health_recovered_total": sum(number(r, "health_recovered_this_step") or 0 for r in group),
             "health_recovery_steps": sum((number(r, "health_recovered_this_step") or 0) > 0 for r in group),
@@ -533,6 +639,12 @@ def _carnivore_hunt_summary(run_index: int, seed: int, records: list[dict]) -> l
             ),
             "health_recovery_blocked_need_steps": sum(
                 str(r.get("health_recovery_block_reason", "")) == "CRITICAL_NEED" for r in group
+            ),
+            "health_recovery_blocked_activity_steps": sum(
+                str(r.get("health_recovery_block_reason", "")) == "NOT_RESTING" for r in group
+            ),
+            "health_recovery_blocked_full_health_steps": sum(
+                str(r.get("health_recovery_block_reason", "")) == "HEALTH_FULL" for r in group
             ),
             "defense_attacks_received": sum(int(r.get("defense_attacks_received", 0) or 0) for r in group),
             "damage_received_from_defense": sum(number(r, "damage_received_from_defense") or 0 for r in group),
@@ -925,6 +1037,7 @@ def _run_worker(task: tuple) -> dict:
         for row in result.reproduction_diagnostics
     ]
     _write_csv(shard / f"reproduction_diagnostics_{run_index:04d}.csv", reproduction_diagnostic_rows)
+    _annotate_retreat_outcomes(result.carnivore_hunt_history, window_steps=3, threat_radius=2)
     hunt_rows = [{"run": run_index, "seed": seed, **row} for row in result.carnivore_hunt_history]
     _write_csv(shard / f"carnivore_history_{run_index:04d}.csv", hunt_rows)
     hunt_summary = _carnivore_hunt_summary(run_index, seed, hunt_rows)
@@ -1037,6 +1150,7 @@ def _combine_activity_summaries(rows: list[dict]) -> list[dict]:
             "critical_hunger_observations": 0, "critical_thirst_observations": 0,
             "sleep_interruptions": 0, "health_recovery_steps": 0,
             "health_recovery_blocked_damage_steps": 0, "health_recovery_blocked_need_steps": 0,
+            "health_recovery_blocked_activity_steps": 0, "health_recovery_blocked_full_health_steps": 0,
             "deaths_observed": 0,
         })
         n = int(row["observations"])
@@ -1045,6 +1159,7 @@ def _combine_activity_summaries(rows: list[dict]) -> list[dict]:
                       "critical_hunger_observations", "critical_thirst_observations",
                       "sleep_interruptions", "health_recovery_steps",
                       "health_recovery_blocked_damage_steps", "health_recovery_blocked_need_steps",
+                      "health_recovery_blocked_activity_steps", "health_recovery_blocked_full_health_steps",
                       "deaths_observed"):
             target[field] += int(row.get(field, 0))
         for field, value in row.items():
@@ -1183,7 +1298,7 @@ def run_audit(*, runs: int, steps: int, seed: int, workers: int,
         ]),
         ("carnivore_history_", "carnivore_hunt_history.csv", [
             "run", "seed", "step", "individual_type", "individual_id", "hunger_before",
-            "hunger_after", "nearest_prey_distance", "visible_humans", "visible_herbivores",
+            "hunger_after", "nearest_prey_distance", "nearest_human_distance", "visible_humans", "visible_herbivores",
             "selected_prey_type", "selected_prey_id", "selected_prey_risk_score",
             "selected_prey_nearby_humans", "target_selection_reason",
             "selected_prey_x_before_action", "selected_prey_y_before_action",
@@ -1192,6 +1307,9 @@ def run_audit(*, runs: int, steps: int, seed: int, workers: int,
             "hunt_position_history_size", "hunt_target_x", "hunt_target_y",
             "health_fraction_before_action", "human_threat_count_within_2", "human_threat_count_adjacent",
             "retreat_decision", "retreat_reason", "retreat_attempted", "retreat_success",
+            "retreat_sustained_success", "retreat_outcome", "retreat_followup_steps",
+            "retreat_failure_reason", "retreat_immediate_distance_increased",
+            "retreat_followup_threat_steps", "retreat_followup_attack_range_steps",
             "retreat_min_human_distance_before", "retreat_min_human_distance_after",
             "health_recovery_eligible", "health_recovered_this_step", "health_recovery_source",
             "health_recovery_block_reason",
@@ -1204,9 +1322,12 @@ def run_audit(*, runs: int, steps: int, seed: int, workers: int,
             "hunt_episodes", "distinct_prey_targeted", "episodes_with_attack", "episodes_with_kill",
             "target_switches", "mean_selected_prey_distance_progress",
             "steps_selected_prey_distance_increased", "steps_selected_prey_distance_unchanged",
-            "retreat_decisions", "retreat_attempts", "successful_retreats", "retreat_success_rate",
+            "retreat_decisions", "retreat_attempts", "retreat_immediate_distance_increases",
+            "retreat_sustained_successes", "retreat_failures", "retreat_censored",
+            "retreat_successful_retreats", "retreat_resolved_attempts", "successful_retreats", "retreat_success_rate",
             "health_recovered_total", "health_recovery_steps", "health_recovery_eligible_steps",
             "health_recovery_blocked_damage_steps", "health_recovery_blocked_need_steps",
+            "health_recovery_blocked_activity_steps", "health_recovery_blocked_full_health_steps",
             "starvation_death", "dehydration_death", "starvation_damage_present_at_death",
             "dehydration_damage_present_at_death", "death_step", "death_cause",
         ]),
@@ -1296,11 +1417,11 @@ def run_audit(*, runs: int, steps: int, seed: int, workers: int,
         },
         "compute_seconds": round(compute_seconds, 3),
         "runs_per_second": round(runs / compute_seconds, 3) if compute_seconds else 0.0,
-        "carnivore_diagnostics": "carnivore_hunt_history contém observações por carnívoro/passo, incluindo decisão/tentativa/sucesso de retirada e recuperação de saúde; carnivore_hunt_summary resume caça, retirada, cura, exposição a presas, estamina e causas de morte.",
+        "carnivore_diagnostics": "carnivore_hunt_history contém observações por carnívoro/passo; sucesso de retirada exige três passos futuros sem humanos no raio de ameaça nem dano defensivo. Eventos sem janela completa são censurados. O campo retreat_immediate_distance_increased registra apenas afastamento imediato. carnivore_hunt_summary resume caça, retirada, cura, exposição a presas, estamina e causas de morte.",
         "target_progress_diagnostics": "target_progress_episodes.csv registra episódios consecutivos de alvo por indivíduo, duração, progresso de distância, bloqueios, alcance e satisfação de necessidade; target_progress_summary.csv agrega por espécie e intenção. Para carnívoros em HUNT, mudanças de coordenada são tratadas como movimento da presa, não troca de alvo.",
         "reproduction_diagnostics": "reproduction_events.csv registra acasalamentos, nascimentos, nascimentos bloqueados e mortes por idade; reproduction_diagnostics.csv agrega elegibilidade, bloqueios fisiológicos, gestações e resultados por espécie e passo. Os tempos reprodutivos são escalas abstratas de prototipagem.",
         "resource_access_diagnostics": "activity_sampled.csv e activity_events.csv incluem distâncias Manhattan, recursos visíveis, alvo selecionado, sucesso de consumo, motivo de bloqueio de movimento e casos de necessidade urgente sem recurso visível; resource_access_summary.csv agrega eventos por execução e espécie (sucessos de aquisição/consumo são eventos por passo, não episódios); inclui eventos com e sem alvo/prioridade compatíveis. Para herbívoros, o alvo de recurso é capturado antes do movimento/consumo e a prioridade é registrada antes da ação, para preservar o alvo quando a planta é consumida no mesmo passo. resource_access_episodes.csv mede episódios de busca com prioridade ativa e encerra sucesso mesmo quando o alvo deixa de existir após o consumo; resource_access_episode_summary.csv agrega taxas de sucesso, latência e bloqueios por execução/espécie/recurso.",
-        "note": "activity_summary usa todos os registros e agora agrega cura de saúde por espécie/atividade; activity_sampled é amostrado; activity_events preserva eventos relevantes, incluindo HEALTH_RECOVERY. As contagens de mortes por causa em runs.csv usam a causa terminal exclusiva; carnivore_hunt_summary também registra separadamente causas fisiológicas contribuintes. herbivores_killed é o total de herbívoros mortos por caça humana ou predação; as colunas herbivores_killed_by_humans e herbivores_killed_by_carnivores separam as causas. carnivore_kill_accounting_delta deve ser zero: compara prey_killed no histórico de caça com mortes humanas+herbívoras por predação. A instrumentação diagnóstica não altera decisões ou parâmetros da simulação. Distância Manhattan e presença no campo de visão não garantem caminho alcançável.",
+        "note": "activity_summary usa todos os registros e agrega cura de saúde por espécie/atividade e bloqueio prioritário da recuperação; activity_sampled é amostrado; activity_events preserva eventos relevantes, incluindo HEALTH_RECOVERY. As contagens de mortes por causa em runs.csv usam a causa terminal exclusiva; carnivore_hunt_summary também registra separadamente causas fisiológicas contribuintes. herbivores_killed é o total de herbívoros mortos por caça humana ou predação; as colunas herbivores_killed_by_humans e herbivores_killed_by_carnivores separam as causas. carnivore_kill_accounting_delta deve ser zero: compara prey_killed no histórico de caça com mortes humanas+herbívoras por predação. A instrumentação diagnóstica não altera decisões ou parâmetros da simulação. Distância Manhattan e presença no campo de visão não garantem caminho alcançável.",
     }
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"

@@ -186,3 +186,104 @@ def test_carnivore_kill_accounting_detects_species_level_mismatch():
     assert counts["human_predation_accounting_delta"] == 1
     assert counts["herbivore_predation_accounting_delta"] == -1
     assert counts["carnivore_kill_accounting_valid"] == 0
+
+
+def test_retreat_outcome_requires_a_complete_safe_followup_window():
+    from run_ecosystem_audit import _annotate_retreat_outcomes
+
+    rows = [
+        {"individual_id": "C001", "step": 10, "retreat_attempted": True,
+         "nearest_human_distance": 3, "human_threat_count_within_2": 0,
+         "defense_attacks_received": 0, "damage_received_from_defense": 0,
+         "termination_cause": "RUNNING"},
+        {"individual_id": "C001", "step": 11, "retreat_attempted": False,
+         "nearest_human_distance": 4, "human_threat_count_within_2": 0,
+         "defense_attacks_received": 0, "damage_received_from_defense": 0,
+         "termination_cause": "RUNNING"},
+        {"individual_id": "C001", "step": 12, "retreat_attempted": False,
+         "nearest_human_distance": 5, "human_threat_count_within_2": 0,
+         "defense_attacks_received": 0, "damage_received_from_defense": 0,
+         "termination_cause": "RUNNING"},
+        {"individual_id": "C001", "step": 13, "retreat_attempted": False,
+         "nearest_human_distance": 4, "human_threat_count_within_2": 0,
+         "defense_attacks_received": 0, "damage_received_from_defense": 0,
+         "termination_cause": "RUNNING"},
+    ]
+    _annotate_retreat_outcomes(rows, window_steps=3, threat_radius=2)
+    assert rows[0]["retreat_outcome"] == "SUCCESS"
+    assert rows[0]["retreat_success"] is True
+    assert rows[0]["retreat_followup_steps"] == 3
+
+
+def test_retreat_fails_if_defensive_damage_occurs_during_followup():
+    from run_ecosystem_audit import _annotate_retreat_outcomes
+
+    rows = [
+        {"individual_id": "C001", "step": 10, "retreat_attempted": True},
+        {"individual_id": "C001", "step": 11, "nearest_human_distance": 4,
+         "human_threat_count_within_2": 0, "defense_attacks_received": 1,
+         "damage_received_from_defense": 10, "termination_cause": "RUNNING"},
+        {"individual_id": "C001", "step": 12, "nearest_human_distance": 4,
+         "human_threat_count_within_2": 0, "defense_attacks_received": 0,
+         "damage_received_from_defense": 0, "termination_cause": "RUNNING"},
+        {"individual_id": "C001", "step": 13, "nearest_human_distance": 4,
+         "human_threat_count_within_2": 0, "defense_attacks_received": 0,
+         "damage_received_from_defense": 0, "termination_cause": "RUNNING"},
+    ]
+    _annotate_retreat_outcomes(rows, window_steps=3, threat_radius=2)
+    assert rows[0]["retreat_outcome"] == "FAILURE"
+    assert rows[0]["retreat_success"] is False
+    assert rows[0]["retreat_failure_reason"] == "DEFENSE_DAMAGE_DURING_FOLLOWUP"
+
+
+def test_retreat_is_censored_when_simulation_ends_before_followup_window():
+    from run_ecosystem_audit import _annotate_retreat_outcomes
+
+    rows = [
+        {"individual_id": "C001", "step": 10, "retreat_attempted": True},
+        {"individual_id": "C001", "step": 11, "nearest_human_distance": 4,
+         "human_threat_count_within_2": 0, "defense_attacks_received": 0,
+         "damage_received_from_defense": 0, "termination_cause": "RUNNING"},
+    ]
+    _annotate_retreat_outcomes(rows, window_steps=3, threat_radius=2)
+    assert rows[0]["retreat_outcome"] == "CENSORED"
+    assert rows[0]["retreat_success"] is False
+    assert rows[0]["retreat_followup_steps"] == 1
+
+
+def test_retreat_can_succeed_when_humans_remain_in_risk_radius_but_cannot_attack():
+    from run_ecosystem_audit import _annotate_retreat_outcomes
+
+    rows = [
+        {"individual_id": "C001", "step": 10, "retreat_attempted": True},
+        {"individual_id": "C001", "step": 11, "nearest_human_distance": 2,
+         "human_threat_count_within_2": 1, "human_threat_count_adjacent": 0,
+         "defense_attacks_received": 0, "damage_received_from_defense": 0, "termination_cause": "RUNNING"},
+        {"individual_id": "C001", "step": 12, "nearest_human_distance": 4,
+         "human_threat_count_within_2": 0, "defense_attacks_received": 0,
+         "damage_received_from_defense": 0, "termination_cause": "RUNNING"},
+        {"individual_id": "C001", "step": 13, "nearest_human_distance": 4,
+         "human_threat_count_within_2": 0, "defense_attacks_received": 0,
+         "damage_received_from_defense": 0, "termination_cause": "RUNNING"},
+    ]
+    _annotate_retreat_outcomes(rows, window_steps=3, threat_radius=2)
+    assert rows[0]["retreat_outcome"] == "SUCCESS"
+    assert rows[0]["retreat_followup_threat_steps"] == 1
+    assert rows[0]["retreat_followup_attack_range_steps"] == 0
+
+
+def test_retreat_fails_if_agent_dies_during_followup_window():
+    from run_ecosystem_audit import _annotate_retreat_outcomes
+
+    rows = [
+        {"individual_id": "C001", "step": 10, "retreat_attempted": True},
+        {"individual_id": "C001", "step": 11, "nearest_human_distance": 4,
+         "human_threat_count_within_2": 0, "defense_attacks_received": 0,
+         "damage_received_from_defense": 0, "termination_cause": "RUNNING"},
+        {"individual_id": "C001", "step": 12, "nearest_human_distance": 4,
+         "human_threat_count_within_2": 0, "defense_attacks_received": 0,
+         "damage_received_from_defense": 0, "termination_cause": "DEFENSE"},
+    ]
+    _annotate_retreat_outcomes(rows, window_steps=3, threat_radius=2)
+    assert rows[0]["retreat_outcome"] == "FAILURE"
+    assert rows[0]["retreat_failure_reason"] == "DIED_DURING_FOLLOWUP"

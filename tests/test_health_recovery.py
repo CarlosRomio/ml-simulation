@@ -39,3 +39,18 @@ def test_recovery_block_reason_is_explicit(activity, hunger, thirst, damage_caus
     healed, reason = recover_health_during_rest(needs, activity, 1.0)
     assert healed == 0.0
     assert reason == expected_reason
+
+
+def test_damage_is_reported_even_when_agent_is_not_resting():
+    needs = AgentNeeds(max_health=100.0, health=50.0, hunger=20.0, thirst=20.0)
+    needs.last_damage_causes = ("DEFENSE",)
+    healed, reason = recover_health_during_rest(needs, "WALKING", 1.0)
+    assert healed == 0.0
+    assert reason == "DAMAGE_THIS_STEP"
+
+
+def test_critical_need_has_priority_over_non_resting_activity():
+    needs = AgentNeeds(max_health=100.0, health=50.0, hunger=75.0, thirst=20.0)
+    healed, reason = recover_health_during_rest(needs, "WALKING", 1.0)
+    assert healed == 0.0
+    assert reason == "CRITICAL_NEED"

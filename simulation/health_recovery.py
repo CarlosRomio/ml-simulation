@@ -19,12 +19,15 @@ def recover_health_during_rest(needs: Any, activity: str, amount: float) -> tupl
     ``HEALTH_FULL`` e ``RECOVERED``. A função não muda a regra biológica atual;
     apenas centraliza a condição e torna o resultado observável.
     """
-    if activity not in RESTING_ACTIVITIES:
-        return 0.0, "NOT_RESTING"
+    # A prioridade é deliberada: registrar dano e necessidades críticas mesmo
+    # quando o agente também não está repousando. Assim a telemetria identifica
+    # o impedimento fisiológico mais relevante, em vez de mascará-lo pela ação.
     if needs.last_damage_causes:
         return 0.0, "DAMAGE_THIS_STEP"
     if needs.hunger >= 70.0 or needs.thirst >= 70.0:
         return 0.0, "CRITICAL_NEED"
+    if activity not in RESTING_ACTIVITIES:
+        return 0.0, "NOT_RESTING"
     if needs.health >= needs.max_health:
         return 0.0, "HEALTH_FULL"
 

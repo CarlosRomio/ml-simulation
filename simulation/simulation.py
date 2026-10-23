@@ -2042,7 +2042,13 @@ class Simulation:
                 "retreat_decision": False,
                 "retreat_reason": "NOT_EVALUATED",
                 "retreat_attempted": False,
+                # retreat_success é preenchido pela auditoria após observar a
+                # janela futura; o movimento imediato é registrado separadamente.
                 "retreat_success": False,
+                "retreat_outcome": "NOT_ATTEMPTED",
+                "retreat_followup_steps": 0,
+                "retreat_failure_reason": "",
+                "retreat_immediate_distance_increased": False,
                 "retreat_min_human_distance_before": "",
                 "retreat_min_human_distance_after": "",
                 "health_recovery_eligible": False,
@@ -2297,7 +2303,7 @@ class Simulation:
                 hunt_record["retreat_min_human_distance_after"] = (
                     min_distance_after if min_distance_after is not None else ""
                 )
-                hunt_record["retreat_success"] = bool(
+                hunt_record["retreat_immediate_distance_increased"] = bool(
                     min_distance_after is not None and before_distance != ""
                     and min_distance_after > float(before_distance)
                 )
